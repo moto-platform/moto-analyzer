@@ -1,20 +1,26 @@
 import React, { useState } from 'react';
-import { Upload, CheckCircle2, RefreshCw, FolderSync, Shield } from 'lucide-react';
-import { DbcMessageDef } from '../types/can';
+import { Upload, CheckCircle2, RefreshCw, FolderSync, Shield, FileSpreadsheet } from 'lucide-react';
+import { DbcMessageDef, CanFrame } from '../types/can';
 import { DEFAULT_MOTO_MESSAGES, parseDbcText } from '../services/dbcParser';
+import { parseVectorAsc, parseCanCsv } from '../services/logParser';
 
 interface SyncPanelProps {
   onDbcLoaded: (messages: DbcMessageDef[]) => void;
   activeDbcMessages: DbcMessageDef[];
+  onLogLoaded: (frames: CanFrame[], filename: string) => void;
 }
 
-export const SyncPanel: React.FC<SyncPanelProps> = ({ onDbcLoaded, activeDbcMessages }) => {
+export const SyncPanel: React.FC<SyncPanelProps> = ({
+  onDbcLoaded,
+  activeDbcMessages,
+  onLogLoaded,
+}) => {
   const [selectedMessage, setSelectedMessage] = useState<DbcMessageDef | null>(
     activeDbcMessages[0] || null
   );
   const [syncStatus, setSyncStatus] = useState<string>('Synchronized with local platform.dbc & cl250.dbc');
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleDbcUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -26,6 +32,32 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ onDbcLoaded, activeDbcMess
         onDbcLoaded(parsed);
         setSelectedMessage(parsed[0] || null);
         setSyncStatus(`Successfully loaded ${parsed.length} message definitions from ${file.name}`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleLogUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (content) {
+        let parsed: CanFrame[] = [];
+        if (file.name.endsWith('.asc')) {
+          parsed = parseVectorAsc(content, activeDbcMessages);
+        } else {
+          parsed = parseCanCsv(content, activeDbcMessages);
+        }
+
+        if (parsed.length > 0) {
+          onLogLoaded(parsed, file.name);
+          setSyncStatus(`Loaded ${parsed.length} frames from ${file.name} for Time Machine replay`);
+        } else {
+          setSyncStatus(`Warning: No valid CAN frames could be parsed from ${file.name}`);
+        }
       }
     };
     reader.readAsText(file);
@@ -59,7 +91,7 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ onDbcLoaded, activeDbcMess
 
       {/* Main Content Grid */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-        {/* Left: DBC Message Catalog */}
+        {/* Left: DBC Message Catalog & File Uploads */}
         <div className="w-full md:w-80 border-r border-surface-border p-4 flex flex-col gap-3 overflow-auto">
           <div className="flex items-center justify-between border-b border-surface-border pb-2">
             <span className="font-semibold text-slate-200">Active DBC Catalog</span>
@@ -92,12 +124,22 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ onDbcLoaded, activeDbcMess
           </div>
 
           {/* Upload New DBC */}
-          <div className="mt-4 pt-3 border-t border-surface-border flex flex-col gap-2">
+          <div className="mt-2 pt-3 border-t border-surface-border flex flex-col gap-2">
             <span className="text-[10px] text-slate-400 uppercase font-semibold">Load Custom DBC</span>
-            <label className="flex items-center justify-center gap-2 p-3 border-2 border-dashed border-surface-border hover:border-cyan-500/50 rounded-lg cursor-pointer bg-surface/30 hover:bg-surface-elevated/40 transition-colors">
+            <label className="flex items-center justify-center gap-2 p-2.5 border-2 border-dashed border-surface-border hover:border-cyan-500/50 rounded-lg cursor-pointer bg-surface/30 hover:bg-surface-elevated/40 transition-colors">
               <Upload className="w-4 h-4 text-cyan-400" />
               <span className="text-slate-300 text-[11px]">Select .dbc file</span>
-              <input type="file" accept=".dbc" onChange={handleFileUpload} className="hidden" />
+              <input type="file" accept=".dbc" onChange={handleDbcUpload} className="hidden" />
+            </label>
+          </div>
+
+          {/* Upload Log for Time Machine Replay */}
+          <div className="mt-1 pt-2 border-t border-surface-border flex flex-col gap-2">
+            <span className="text-[10px] text-slate-400 uppercase font-semibold">Time Machine Replay Log</span>
+            <label className="flex items-center justify-center gap-2 p-2.5 border-2 border-dashed border-surface-border hover:border-amber-500/50 rounded-lg cursor-pointer bg-surface/30 hover:bg-surface-elevated/40 transition-colors">
+              <FileSpreadsheet className="w-4 h-4 text-amber-400" />
+              <span className="text-slate-300 text-[11px]">Load .asc or .csv Log</span>
+              <input type="file" accept=".asc,.csv" onChange={handleLogUpload} className="hidden" />
             </label>
           </div>
         </div>
