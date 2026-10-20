@@ -9,7 +9,8 @@ import {
   Wrench, 
   Database,
   Radio,
-  Compass
+  Compass,
+  HeartPulse
 } from 'lucide-react';
 import { CockpitTab, BusStats, TelemetrySource } from '../types/can';
 
@@ -138,6 +139,18 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <Wrench className="w-3.5 h-3.5" />
           <span>UDS Diag</span>
+        </button>
+
+        <button
+          onClick={() => onTabChange('health')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+            activeTab === 'health'
+              ? 'bg-surface-elevated text-rose-400 shadow-sm border border-rose-500/30'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <HeartPulse className="w-3.5 h-3.5" />
+          <span>Health W1-W5</span>
         </button>
 
         <button
