@@ -7,6 +7,7 @@ import { UdsPanel } from './components/UdsPanel';
 import { SyncPanel } from './components/SyncPanel';
 import { AttitudeGauge } from './components/AttitudeGauge';
 import { ReplayScrubber } from './components/ReplayScrubber';
+import { HealthPanel } from './components/HealthPanel';
 import {
   CockpitTab,
   CanFrame,
@@ -42,6 +43,20 @@ export function App() {
     lateralAccel: 0,
   });
 
+  // Subsystem health state for W1-W5
+  const [vehicleHealth, setVehicleHealth] = useState({
+    rpm: 0,
+    speed: 0,
+    throttlePct: 0,
+    gear: 1,
+    coolantTemp: 75,
+    frontWheelSpeed: 0,
+    rearWheelSpeed: 0,
+    absActive: false,
+    rtCoreAlive: 0,
+    safetyNodeAlive: 0,
+  });
+
   // Ring buffers and maps
   const [framesMap, setFramesMap] = useState<Map<number, CanFrame>>(new Map());
   const [framesLog, setFramesLog] = useState<CanFrame[]>([]);
@@ -73,6 +88,35 @@ export function App() {
         rollRate: typeof frame.decodedSignals.RollRate === 'number' ? frame.decodedSignals.RollRate : 0,
         lateralAccel: typeof frame.decodedSignals.LateralAccel === 'number' ? frame.decodedSignals.LateralAccel : 0,
       });
+    }
+
+    // Update subsystem health parameters
+    if (frame.id === 0x020 && frame.decodedSignals) {
+      setVehicleHealth((prev) => ({
+        ...prev,
+        rpm: typeof frame.decodedSignals?.EngineSpeed === 'number' ? frame.decodedSignals.EngineSpeed : prev.rpm,
+        speed: typeof frame.decodedSignals?.VehicleSpeed === 'number' ? frame.decodedSignals.VehicleSpeed : prev.speed,
+        throttlePct: typeof frame.decodedSignals?.ThrottlePosition === 'number' ? frame.decodedSignals.ThrottlePosition : prev.throttlePct,
+        gear: typeof frame.decodedSignals?.GearPosition === 'number' ? frame.decodedSignals.GearPosition : prev.gear,
+        coolantTemp: typeof frame.decodedSignals?.EngineCoolantTemp === 'number' ? frame.decodedSignals.EngineCoolantTemp : prev.coolantTemp,
+      }));
+    } else if (frame.id === 0x110 && frame.decodedSignals) {
+      setVehicleHealth((prev) => ({
+        ...prev,
+        frontWheelSpeed: typeof frame.decodedSignals?.FrontWheelSpeed === 'number' ? frame.decodedSignals.FrontWheelSpeed : prev.frontWheelSpeed,
+        rearWheelSpeed: typeof frame.decodedSignals?.RearWheelSpeed === 'number' ? frame.decodedSignals.RearWheelSpeed : prev.rearWheelSpeed,
+        absActive: frame.decodedSignals?.AbsIntervention === 1,
+      }));
+    } else if (frame.id === 0x081 && frame.decodedSignals) {
+      setVehicleHealth((prev) => ({
+        ...prev,
+        rtCoreAlive: typeof frame.decodedSignals?.AliveCounter === 'number' ? frame.decodedSignals.AliveCounter : prev.rtCoreAlive,
+      }));
+    } else if (frame.id === 0x082 && frame.decodedSignals) {
+      setVehicleHealth((prev) => ({
+        ...prev,
+        safetyNodeAlive: typeof frame.decodedSignals?.AliveCounter === 'number' ? frame.decodedSignals.AliveCounter : prev.safetyNodeAlive,
+      }));
     }
 
     // 1. Update Overwrite Map
@@ -395,6 +439,23 @@ export function App() {
           )}
 
           {activeTab === 'uds' && <UdsPanel />}
+
+          {activeTab === 'health' && (
+            <HealthPanel
+              stats={stats}
+              currentRpm={vehicleHealth.rpm}
+              currentSpeed={vehicleHealth.speed}
+              currentLeanAngle={vehicleDynamics.leanAngle}
+              currentCoolantTemp={vehicleHealth.coolantTemp}
+              gear={vehicleHealth.gear}
+              throttlePct={vehicleHealth.throttlePct}
+              frontWheelSpeed={vehicleHealth.frontWheelSpeed}
+              rearWheelSpeed={vehicleHealth.rearWheelSpeed}
+              absActive={vehicleHealth.absActive}
+              rtCoreAlive={vehicleHealth.rtCoreAlive}
+              safetyNodeAlive={vehicleHealth.safetyNodeAlive}
+            />
+          )}
 
           {activeTab === 'sync' && (
             <SyncPanel

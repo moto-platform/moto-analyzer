@@ -83,6 +83,6 @@ export interface DbcMessageDef {
   signals: DbcSignalDef[];
 }
 
-export type CockpitTab = 'trace' | 'sniffer' | 'oscilloscope' | 'uds' | 'sync';
+export type CockpitTab = 'trace' | 'sniffer' | 'oscilloscope' | 'uds' | 'health' | 'sync';
 export type TraceMode = 'overwrite' | 'scroll';
 export type TelemetrySource = 'virtual' | 'local_file' | 'websocket';
