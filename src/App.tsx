@@ -6,6 +6,7 @@ import { OscilloscopePanel } from './components/OscilloscopePanel';
 import { UdsPanel } from './components/UdsPanel';
 import { SyncPanel } from './components/SyncPanel';
 import { AttitudeGauge } from './components/AttitudeGauge';
+import { ReplayScrubber } from './components/ReplayScrubber';
 import {
   CockpitTab,
   CanFrame,
@@ -23,6 +24,12 @@ export function App() {
   const [isRunning, setIsRunning] = useState<boolean>(true);
   const [source, setSource] = useState<TelemetrySource>('virtual');
   const [showAttitudeHud, setShowAttitudeHud] = useState<boolean>(true);
+
+  // Time Machine Replay state
+  const [replayFrames, setReplayFrames] = useState<CanFrame[]>([]);
+  const [replayIndex, setReplayIndex] = useState<number>(0);
+  const [isReplaying, setIsReplaying] = useState<boolean>(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
 
   // Live vehicle dynamics state from Frame 0x021
   const [vehicleDynamics, setVehicleDynamics] = useState<{
@@ -73,7 +80,6 @@ export function App() {
       const next = new Map(prev);
       const existing = next.get(frame.id);
 
-      // Check changed bytes
       const changedBytes: boolean[] = [];
       if (existing) {
         for (let i = 0; i < frame.data.length; i++) {
@@ -216,6 +222,66 @@ export function App() {
     });
   };
 
+  // Time Machine Log File Loader
+  const handleLogLoaded = (frames: CanFrame[]) => {
+    setReplayFrames(frames);
+    setReplayIndex(0);
+    setSource('local_file');
+    setIsReplaying(false);
+    // Pause virtual bus when log is loaded
+    virtualBusRef.current?.stop();
+    setIsRunning(false);
+    // Feed the first frame
+    if (frames.length > 0) {
+      handleIncomingFrame(frames[0]);
+    }
+  };
+
+  // Time Machine Playback Timer
+  useEffect(() => {
+    if (!isReplaying || replayFrames.length === 0) return;
+
+    const intervalMs = Math.max(5, 20 / playbackSpeed);
+    const interval = setInterval(() => {
+      setReplayIndex((prev) => {
+        if (prev + 1 >= replayFrames.length) {
+          setIsReplaying(false);
+          return prev;
+        }
+        const nextIndex = prev + 1;
+        handleIncomingFrame(replayFrames[nextIndex]);
+        return nextIndex;
+      });
+    }, intervalMs);
+
+    return () => clearInterval(interval);
+  }, [isReplaying, replayFrames, playbackSpeed, handleIncomingFrame]);
+
+  // Handle manual scrub
+  const handleScrub = (index: number) => {
+    if (index >= 0 && index < replayFrames.length) {
+      setReplayIndex(index);
+      handleIncomingFrame(replayFrames[index]);
+    }
+  };
+
+  // Step controls
+  const handleStepForward = () => {
+    if (replayIndex + 1 < replayFrames.length) {
+      const next = replayIndex + 1;
+      setReplayIndex(next);
+      handleIncomingFrame(replayFrames[next]);
+    }
+  };
+
+  const handleStepBackward = () => {
+    if (replayIndex - 1 >= 0) {
+      const prev = replayIndex - 1;
+      setReplayIndex(prev);
+      handleIncomingFrame(replayFrames[prev]);
+    }
+  };
+
   // 1-second interval to update stats
   useEffect(() => {
     const interval = setInterval(() => {
@@ -226,8 +292,8 @@ export function App() {
       const calculatedLoad = Math.min(95, Math.max(12, (rate * 125 * 8 / 500000) * 100));
 
       setStats((prev) => ({
-        busLoadPct: isRunning ? calculatedLoad : 0,
-        msgPerSec: isRunning ? rate : 0,
+        busLoadPct: isRunning || isReplaying ? calculatedLoad : 0,
+        msgPerSec: isRunning || isReplaying ? rate : 0,
         errorFrames: 0,
         totalRx: prev.totalRx + rate,
         uptimeSec: Math.floor(elapsedSec),
@@ -235,7 +301,10 @@ export function App() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isRunning]);
+  }, [isRunning, isReplaying]);
+
+  const currentReplayTime = replayFrames[replayIndex]?.timestamp || 0;
+  const totalReplayDuration = replayFrames[replayFrames.length - 1]?.timestamp || 0;
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-background text-slate-100 font-sans">
@@ -250,8 +319,9 @@ export function App() {
         source={source}
         onSourceChange={(s) => {
           setSource(s);
-          if (s === 'virtual' && isRunning) {
-            virtualBusRef.current?.start(handleIncomingFrame);
+          if (s === 'virtual') {
+            setIsReplaying(false);
+            if (isRunning) virtualBusRef.current?.start(handleIncomingFrame);
           } else {
             virtualBusRef.current?.stop();
           }
@@ -269,6 +339,7 @@ export function App() {
               framesLog={framesLog}
               onTriggerPause={() => {
                 if (isRunning) togglePlay();
+                if (isReplaying) setIsReplaying(false);
               }}
             />
           )}
@@ -291,6 +362,7 @@ export function App() {
             <SyncPanel
               onDbcLoaded={setActiveDbcMessages}
               activeDbcMessages={activeDbcMessages}
+              onLogLoaded={handleLogLoaded}
             />
           )}
         </main>
@@ -306,6 +378,24 @@ export function App() {
           </div>
         )}
       </div>
+
+      {/* Bottom Replay Scrubber (Shown whenever a log file is loaded or source is local_file) */}
+      {(source === 'local_file' || replayFrames.length > 0) && (
+        <ReplayScrubber
+          isReplaying={isReplaying}
+          onToggleReplay={() => setIsReplaying(!isReplaying)}
+          currentIndex={replayIndex}
+          totalFrames={replayFrames.length}
+          currentTimeSec={currentReplayTime}
+          totalDurationSec={totalReplayDuration}
+          playbackSpeed={playbackSpeed}
+          onSpeedChange={setPlaybackSpeed}
+          onScrub={handleScrub}
+          onStepForward={handleStepForward}
+          onStepBackward={handleStepBackward}
+          onRestart={() => handleScrub(0)}
+        />
+      )}
     </div>
   );
 }
