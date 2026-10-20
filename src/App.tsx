@@ -127,6 +127,29 @@ export function App() {
         }
       }
 
+      // 64-bit flip counters
+      const bitFlips = existing ? [...existing.bitFlips] : Array(64).fill(0);
+      if (existing) {
+        for (let b = 0; b < 8; b++) {
+          const cur = frame.data[b] ?? 0;
+          const prv = existing.currentBytes[b] ?? 0;
+          const xor = cur ^ prv;
+          if (xor !== 0) {
+            for (let bit = 0; bit < 8; bit++) {
+              if ((xor & (1 << bit)) !== 0) {
+                const bitIndex = b * 8 + (7 - bit);
+                bitFlips[bitIndex] = (bitFlips[bitIndex] || 0) + 1;
+              }
+            }
+          }
+        }
+      }
+
+      const frameHistory = existing
+        ? [...existing.frameHistory, { timestamp: frame.timestamp, data: frame.data }]
+        : [{ timestamp: frame.timestamp, data: frame.data }];
+      if (frameHistory.length > 16) frameHistory.shift();
+
       next.set(frame.id, {
         id: frame.id,
         idHex: frame.idHex,
@@ -138,6 +161,8 @@ export function App() {
         changeCounts,
         notchedBytes,
         lastUpdated: performance.now(),
+        frameHistory,
+        bitFlips,
       });
 
       return next;
@@ -207,6 +232,18 @@ export function App() {
         const notched = [...rec.notchedBytes];
         notched[byteIdx] = !notched[byteIdx];
         next.set(id, { ...rec, notchedBytes: notched });
+      }
+      return next;
+    });
+  };
+
+  const handleInvertNotch = (id: number) => {
+    setSnifferMap((prev) => {
+      const next = new Map(prev);
+      const rec = next.get(id);
+      if (rec) {
+        const inverted = rec.notchedBytes.map((n) => !n);
+        next.set(id, { ...rec, notchedBytes: inverted });
       }
       return next;
     });
@@ -348,6 +385,7 @@ export function App() {
             <SnifferPanel
               snifferMap={snifferMap}
               onToggleNotch={handleToggleNotch}
+              onInvertNotch={handleInvertNotch}
               onClearNotches={handleClearNotches}
             />
           )}
