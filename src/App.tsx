@@ -5,6 +5,7 @@ import { SnifferPanel } from './components/SnifferPanel';
 import { OscilloscopePanel } from './components/OscilloscopePanel';
 import { UdsPanel } from './components/UdsPanel';
 import { SyncPanel } from './components/SyncPanel';
+import { AttitudeGauge } from './components/AttitudeGauge';
 import {
   CockpitTab,
   CanFrame,
@@ -21,6 +22,18 @@ export function App() {
   const [activeTab, setActiveTab] = useState<CockpitTab>('trace');
   const [isRunning, setIsRunning] = useState<boolean>(true);
   const [source, setSource] = useState<TelemetrySource>('virtual');
+  const [showAttitudeHud, setShowAttitudeHud] = useState<boolean>(true);
+
+  // Live vehicle dynamics state from Frame 0x021
+  const [vehicleDynamics, setVehicleDynamics] = useState<{
+    leanAngle: number;
+    rollRate: number;
+    lateralAccel: number;
+  }>({
+    leanAngle: 0,
+    rollRate: 0,
+    lateralAccel: 0,
+  });
 
   // Ring buffers and maps
   const [framesMap, setFramesMap] = useState<Map<number, CanFrame>>(new Map());
@@ -45,6 +58,15 @@ export function App() {
   // Frame processing callback
   const handleIncomingFrame = useCallback((frame: CanFrame) => {
     rxCounterRef.current += 1;
+
+    // Update dynamics if frame is 0x021
+    if (frame.id === 0x021 && frame.decodedSignals) {
+      setVehicleDynamics({
+        leanAngle: typeof frame.decodedSignals.LeanAngle === 'number' ? frame.decodedSignals.LeanAngle : 0,
+        rollRate: typeof frame.decodedSignals.RollRate === 'number' ? frame.decodedSignals.RollRate : 0,
+        lateralAccel: typeof frame.decodedSignals.LateralAccel === 'number' ? frame.decodedSignals.LateralAccel : 0,
+      });
+    }
 
     // 1. Update Overwrite Map
     setFramesMap((prev) => {
@@ -123,7 +145,6 @@ export function App() {
           if (typeof val === 'number') {
             const arr = next.get(sigName) || [];
             const newArr = [...arr, { time: frame.timestamp, value: val }];
-            // Keep last 400 points per channel
             if (newArr.length > 400) newArr.shift();
             next.set(sigName, newArr);
           }
@@ -195,14 +216,13 @@ export function App() {
     });
   };
 
-  // 1-second interval to update stats (Hz rate, bus load, total rx)
+  // 1-second interval to update stats
   useEffect(() => {
     const interval = setInterval(() => {
       const elapsedSec = (Date.now() - startTimeRef.current) / 1000;
       const rate = rxCounterRef.current;
       rxCounterRef.current = 0;
 
-      // Realistic CAN 500 kbps bus load formula: (rate * 128 bits / 500,000) * 100
       const calculatedLoad = Math.min(95, Math.max(12, (rate * 125 * 8 / 500000) * 100));
 
       setStats((prev) => ({
@@ -236,35 +256,56 @@ export function App() {
             virtualBusRef.current?.stop();
           }
         }}
+        showAttitudeHud={showAttitudeHud}
+        onToggleAttitudeHud={() => setShowAttitudeHud(!showAttitudeHud)}
       />
 
-      {/* Main Cockpit Body */}
-      <main className="flex-1 overflow-hidden">
-        {activeTab === 'trace' && (
-          <TracePanel framesMap={framesMap} framesLog={framesLog} />
-        )}
+      {/* Main Cockpit Body with Optional Attitude HUD Widget */}
+      <div className="flex-1 flex overflow-hidden relative">
+        <main className="flex-1 overflow-hidden">
+          {activeTab === 'trace' && (
+            <TracePanel
+              framesMap={framesMap}
+              framesLog={framesLog}
+              onTriggerPause={() => {
+                if (isRunning) togglePlay();
+              }}
+            />
+          )}
 
-        {activeTab === 'sniffer' && (
-          <SnifferPanel
-            snifferMap={snifferMap}
-            onToggleNotch={handleToggleNotch}
-            onClearNotches={handleClearNotches}
-          />
-        )}
+          {activeTab === 'sniffer' && (
+            <SnifferPanel
+              snifferMap={snifferMap}
+              onToggleNotch={handleToggleNotch}
+              onClearNotches={handleClearNotches}
+            />
+          )}
 
-        {activeTab === 'oscilloscope' && (
-          <OscilloscopePanel signalsHistory={signalsHistory} />
-        )}
+          {activeTab === 'oscilloscope' && (
+            <OscilloscopePanel signalsHistory={signalsHistory} />
+          )}
 
-        {activeTab === 'uds' && <UdsPanel />}
+          {activeTab === 'uds' && <UdsPanel />}
 
-        {activeTab === 'sync' && (
-          <SyncPanel
-            onDbcLoaded={setActiveDbcMessages}
-            activeDbcMessages={activeDbcMessages}
-          />
+          {activeTab === 'sync' && (
+            <SyncPanel
+              onDbcLoaded={setActiveDbcMessages}
+              activeDbcMessages={activeDbcMessages}
+            />
+          )}
+        </main>
+
+        {/* Floating / Docked Motorcycle Dynamics HUD */}
+        {showAttitudeHud && (
+          <div className="absolute bottom-4 right-4 z-20 w-80 shadow-2xl transition-all">
+            <AttitudeGauge
+              leanAngleDeg={vehicleDynamics.leanAngle}
+              rollRateDegS={vehicleDynamics.rollRate}
+              lateralAccelG={vehicleDynamics.lateralAccel}
+            />
+          </div>
         )}
-      </main>
+      </div>
     </div>
   );
 }

@@ -8,7 +8,8 @@ import {
   LineChart, 
   Wrench, 
   Database,
-  Radio
+  Radio,
+  Compass
 } from 'lucide-react';
 import { CockpitTab, BusStats, TelemetrySource } from '../types/can';
 
@@ -21,6 +22,8 @@ interface HeaderProps {
   stats: BusStats;
   source: TelemetrySource;
   onSourceChange: (source: TelemetrySource) => void;
+  showAttitudeHud: boolean;
+  onToggleAttitudeHud: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -32,6 +35,8 @@ export const Header: React.FC<HeaderProps> = ({
   stats,
   source,
   onSourceChange,
+  showAttitudeHud,
+  onToggleAttitudeHud,
 }) => {
   return (
     <header className="bg-surface border-b border-surface-border px-4 py-2 flex flex-col md:flex-row items-center justify-between gap-3 select-none">
@@ -176,6 +181,20 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-1.5">
+          {/* Toggle Lean Angle HUD */}
+          <button
+            onClick={onToggleAttitudeHud}
+            className={`p-2 rounded font-mono text-xs flex items-center gap-1.5 transition-all border ${
+              showAttitudeHud
+                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
+                : 'bg-surface-elevated text-slate-400 border-surface-border hover:text-slate-200'
+            }`}
+            title="Toggle Lean Angle & Dynamics HUD"
+          >
+            <Compass className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">HUD</span>
+          </button>
+
           <button
             onClick={onTogglePlay}
             className={`p-2 rounded font-mono text-xs flex items-center gap-1.5 transition-all shadow-sm ${
