@@ -8,6 +8,7 @@ import { SyncPanel } from './components/SyncPanel';
 import { AttitudeGauge } from './components/AttitudeGauge';
 import { ReplayScrubber } from './components/ReplayScrubber';
 import { HealthPanel } from './components/HealthPanel';
+import { ClusterPanel } from './components/ClusterPanel';
 import {
   CockpitTab,
   CanFrame,
@@ -485,6 +486,13 @@ export function App() {
               absActive={vehicleHealth.absActive}
               rtCoreAlive={vehicleHealth.rtCoreAlive}
               safetyNodeAlive={vehicleHealth.safetyNodeAlive}
+            />
+          )}
+
+          {activeTab === 'cluster' && (
+            <ClusterPanel
+              telemetry={vehicleHealth}
+              dynamics={vehicleDynamics}
             />
           )}
 

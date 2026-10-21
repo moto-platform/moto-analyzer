@@ -10,7 +10,8 @@ import {
   Database,
   Radio,
   Compass,
-  HeartPulse
+  HeartPulse,
+  Gauge
 } from 'lucide-react';
 import { CockpitTab, BusStats, TelemetrySource } from '../types/can';
 
@@ -162,6 +163,18 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <HeartPulse className="w-3.5 h-3.5" />
           <span>Health W1-W5</span>
+        </button>
+
+        <button
+          onClick={() => onTabChange('cluster')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+            activeTab === 'cluster'
+              ? 'bg-surface-elevated text-amber-400 shadow-sm border border-amber-500/30'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Gauge className="w-3.5 h-3.5" />
+          <span>Virtual Cluster</span>
         </button>
 
         <button
