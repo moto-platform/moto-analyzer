@@ -88,6 +88,17 @@ export const Header: React.FC<HeaderProps> = ({
           >
             WS Live
           </button>
+          <button
+            onClick={() => onSourceChange('webserial')}
+            className={`px-2 py-1 rounded transition-colors ${
+              source === 'webserial'
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-semibold'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+            title="Connect physical USB CAN adapter via WebSerial (SLCAN)"
+          >
+            USB CAN
+          </button>
         </div>
       </div>
 
