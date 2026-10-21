@@ -1,5 +1,13 @@
-import { useRef, useEffect, useState } from 'react';
-import { Crosshair, CheckSquare, Square } from 'lucide-react';
+import { useRef, useEffect, useState, useMemo } from 'react';
+import { Crosshair, CheckSquare, Square, Camera, Download, Calculator } from 'lucide-react';
+import {
+  MathChannelDef,
+  DEFAULT_MATH_CHANNELS,
+  computeMathChannel,
+  exportOscilloscopeCsv,
+  captureBrandedSnapshot,
+  CsvExportChannel,
+} from '../services/mathChannels';
 
 interface ChannelConfig {
   name: string;
@@ -28,12 +36,95 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
     { name: 'LeanAngle', label: 'Lean Angle', unit: 'deg', color: '#f59e0b', min: -50, max: 50, enabled: true },
     { name: 'ThrottlePosition', label: 'Throttle %', unit: '%', color: '#a855f7', min: 0, max: 100, enabled: false },
     { name: 'EngineCoolantTemp', label: 'Coolant Temp', unit: '°C', color: '#f43f5e', min: 40, max: 110, enabled: false },
+    { name: 'FrontWheelSpeed', label: 'Front Wheel', unit: 'km/h', color: '#38bdf8', min: 0, max: 160, enabled: false },
+    { name: 'RearWheelSpeed', label: 'Rear Wheel', unit: 'km/h', color: '#fb923c', min: 0, max: 160, enabled: false },
   ]);
+
+  const [mathChannels, setMathChannels] = useState<MathChannelDef[]>(DEFAULT_MATH_CHANNELS);
+  const [showMathToolbar, setShowMathToolbar] = useState<boolean>(false);
 
   const toggleChannel = (name: string) => {
     setChannels((prev) =>
       prev.map((ch) => (ch.name === name ? { ...ch, enabled: !ch.enabled } : ch))
     );
+  };
+
+  const toggleMathChannel = (id: string) => {
+    setMathChannels((prev) =>
+      prev.map((ch) => (ch.id === id ? { ...ch, enabled: !ch.enabled } : ch))
+    );
+  };
+
+  // Precompute active math channel series
+  const computedMathSeries = useMemo(() => {
+    const map = new Map<string, { time: number; value: number }[]>();
+    mathChannels.forEach((mCh) => {
+      if (mCh.enabled) {
+        map.set(mCh.id, computeMathChannel(mCh, signalsHistory));
+      }
+    });
+    return map;
+  }, [mathChannels, signalsHistory]);
+
+  // Export CSV handler
+  const handleExportCsv = () => {
+    const exportData: CsvExportChannel[] = [];
+
+    // Add enabled physical channels
+    channels.forEach((ch) => {
+      if (ch.enabled) {
+        exportData.push({
+          name: ch.name,
+          label: ch.label,
+          unit: ch.unit,
+          data: signalsHistory.get(ch.name) || [],
+        });
+      }
+    });
+
+    // Add enabled math channels
+    mathChannels.forEach((mCh) => {
+      if (mCh.enabled) {
+        exportData.push({
+          name: mCh.id,
+          label: `[Math] ${mCh.label}`,
+          unit: mCh.unit,
+          data: computedMathSeries.get(mCh.id) || [],
+        });
+      }
+    });
+
+    if (exportData.length === 0) {
+      alert('Please enable at least one channel to export CSV.');
+      return;
+    }
+
+    const csvContent = exportOscilloscopeCsv(exportData);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `moto-analyzer-oscilloscope-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Export Snapshot PNG handler
+  const handleSnapshotPng = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const activeCount = channels.filter((c) => c.enabled).length + mathChannels.filter((m) => m.enabled).length;
+    const dataUrl = captureBrandedSnapshot(canvas, {
+      activeChannelsCount: activeCount,
+      timeWindowSec,
+      platformName: 'Honda CL250 SDV Architecture',
+    });
+
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `moto-analyzer-scope-snapshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+    a.click();
   };
 
   // Canvas 2D render loop
@@ -88,13 +179,13 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
 
       const startTime = Math.max(0, latestTime - timeWindowSec);
 
-      // Plot Enabled Channels
+      // 1. Plot Enabled Standard Channels
+      ctx.setLineDash([]);
       channels.forEach((ch) => {
         if (!ch.enabled) return;
         const points = signalsHistory.get(ch.name);
         if (!points || points.length < 2) return;
 
-        // Filter points within the current time window
         const visiblePoints = points.filter((p) => p.time >= startTime && p.time <= latestTime);
         if (visiblePoints.length < 2) return;
 
@@ -104,10 +195,9 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
 
         visiblePoints.forEach((pt, idx) => {
           const x = ((pt.time - startTime) / timeWindowSec) * width;
-          // Normalize value between min and max
           const normalized = (pt.value - ch.min) / (ch.max - ch.min);
           const clamped = Math.max(0, Math.min(1, normalized));
-          const y = height - clamped * (height - 20) - 10;
+          const y = height - clamped * (height - 30) - 15;
 
           if (idx === 0) {
             ctx.moveTo(x, y);
@@ -119,7 +209,38 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
         ctx.stroke();
       });
 
-      // Draw Measurement Cursors
+      // 2. Plot Enabled Math Channels (with dashed neon line)
+      mathChannels.forEach((mCh) => {
+        if (!mCh.enabled) return;
+        const points = computedMathSeries.get(mCh.id);
+        if (!points || points.length < 2) return;
+
+        const visiblePoints = points.filter((p) => p.time >= startTime && p.time <= latestTime);
+        if (visiblePoints.length < 2) return;
+
+        ctx.setLineDash([6, 3]);
+        ctx.strokeStyle = mCh.color;
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+
+        visiblePoints.forEach((pt, idx) => {
+          const x = ((pt.time - startTime) / timeWindowSec) * width;
+          const normalized = (pt.value - mCh.min) / (mCh.max - mCh.min);
+          const clamped = Math.max(0, Math.min(1, normalized));
+          const y = height - clamped * (height - 30) - 15;
+
+          if (idx === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        });
+
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+
+      // 3. Draw Measurement Cursors
       if (cursorA !== null) {
         ctx.strokeStyle = '#f59e0b';
         ctx.setLineDash([4, 4]);
@@ -130,7 +251,6 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Label
         ctx.fillStyle = '#f59e0b';
         ctx.font = '10px monospace';
         ctx.fillText('Cursor A', cursorA + 4, 15);
@@ -146,7 +266,6 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Label
         ctx.fillStyle = '#06b6d4';
         ctx.font = '10px monospace';
         ctx.fillText('Cursor B', cursorB + 4, 30);
@@ -160,7 +279,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [signalsHistory, channels, timeWindowSec, cursorA, cursorB]);
+  }, [signalsHistory, channels, mathChannels, computedMathSeries, timeWindowSec, cursorA, cursorB]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -204,10 +323,24 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
               </button>
             );
           })}
+
+          {/* Math Channels Popover Toggle */}
+          <button
+            onClick={() => setShowMathToolbar((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs border transition-all ${
+              showMathToolbar || mathChannels.some((m) => m.enabled)
+                ? 'bg-pink-950/40 border-pink-500/60 text-pink-300 font-medium'
+                : 'bg-surface-elevated text-slate-400 border-surface-border hover:text-slate-200'
+            }`}
+          >
+            <Calculator className="w-3.5 h-3.5 text-pink-400" />
+            <span>Math Channels {mathChannels.filter((m) => m.enabled).length > 0 ? `(${mathChannels.filter((m) => m.enabled).length})` : ''}</span>
+          </button>
         </div>
 
-        {/* Time Window Zoom & Cursor Controls */}
+        {/* Time Window Zoom, Export & Cursor Controls */}
         <div className="flex items-center gap-2">
+          {/* Time scale */}
           <div className="flex items-center bg-background border border-surface-border rounded p-0.5">
             <button
               onClick={() => setTimeWindowSec(5)}
@@ -229,6 +362,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
             </button>
           </div>
 
+          {/* Reset Cursors */}
           <button
             onClick={() => {
               setCursorA(null);
@@ -240,8 +374,60 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
             <Crosshair className="w-3 h-3" />
             <span>Reset Cursors</span>
           </button>
+
+          {/* Export CSV */}
+          <button
+            onClick={handleExportCsv}
+            className="flex items-center gap-1 px-2.5 py-1 rounded bg-surface-elevated hover:bg-emerald-950/40 text-emerald-300 border border-emerald-500/40 hover:border-emerald-500 text-xs transition-colors"
+            title="Export plotted channels to CSV"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>CSV</span>
+          </button>
+
+          {/* Snapshot PNG */}
+          <button
+            onClick={handleSnapshotPng}
+            className="flex items-center gap-1 px-2.5 py-1 rounded bg-surface-elevated hover:bg-cyan-950/40 text-cyan-300 border border-cyan-500/40 hover:border-cyan-500 text-xs transition-colors"
+            title="Capture branded oscilloscope screenshot"
+          >
+            <Camera className="w-3.5 h-3.5" />
+            <span>PNG</span>
+          </button>
         </div>
       </div>
+
+      {/* Math Channels Sub-Toolbar */}
+      {showMathToolbar && (
+        <div className="bg-surface-elevated/60 border-b border-surface-border px-4 py-2 flex flex-wrap items-center gap-3 animate-fadeIn">
+          <span className="text-pink-400 font-semibold flex items-center gap-1">
+            <Calculator className="w-3 h-3" />
+            <span>DERIVED MATH CHANNELS:</span>
+          </span>
+          {mathChannels.map((mCh) => {
+            const series = computedMathSeries.get(mCh.id);
+            const latest = series && series.length > 0 ? series[series.length - 1].value : '-';
+
+            return (
+              <button
+                key={mCh.id}
+                onClick={() => toggleMathChannel(mCh.id)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs border transition-all ${
+                  mCh.enabled
+                    ? 'bg-surface-elevated text-pink-200'
+                    : 'bg-background text-slate-500 border-surface-border opacity-70'
+                }`}
+                style={{ borderColor: mCh.enabled ? mCh.color : undefined }}
+              >
+                {mCh.enabled ? <CheckSquare className="w-3.5 h-3.5" style={{ color: mCh.color }} /> : <Square className="w-3.5 h-3.5" />}
+                <span>{mCh.label}:</span>
+                <strong style={{ color: mCh.color }}>{latest}</strong>
+                <span className="text-[10px] text-slate-400">{mCh.unit}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Main Plot Area */}
       <div className="flex-1 relative p-2 overflow-hidden flex flex-col">
@@ -268,7 +454,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
             {cursorA !== null && cursorB !== null && (
               <div className="flex items-center justify-between gap-4 border-t border-surface-border/60 pt-1 mt-1 font-semibold text-emerald-400">
                 <span>ΔX (Time Offset):</span>
-                <span>{Math.abs((cursorB - cursorA) / 1200 * timeWindowSec * 1000).toFixed(1)} ms</span>
+                <span>{Math.abs(((cursorB - cursorA) / 1200) * timeWindowSec * 1000).toFixed(1)} ms</span>
               </div>
             )}
           </div>
