@@ -19,6 +19,9 @@ import {
 } from './types/can';
 import { VirtualCanBus } from './services/virtualBus';
 import { DEFAULT_MOTO_MESSAGES } from './services/dbcParser';
+import { WebSerialCanAdapter } from './services/webSerialCan';
+import { WebSocketStreamClient } from './services/streamClient';
+import { IsoTpReassembler } from './services/isoTp';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<CockpitTab>('trace');
@@ -74,6 +77,9 @@ export function App() {
   });
 
   const virtualBusRef = useRef<VirtualCanBus | null>(null);
+  const webSerialRef = useRef<WebSerialCanAdapter | null>(null);
+  const webSocketRef = useRef<WebSocketStreamClient | null>(null);
+  const isoTpRef = useRef<IsoTpReassembler | null>(null);
   const rxCounterRef = useRef<number>(0);
   const startTimeRef = useRef<number>(Date.now());
 
@@ -226,6 +232,11 @@ export function App() {
         });
         return next;
       });
+    }
+
+    // 5. Route diagnostic frames to ISO-TP reassembler
+    if (frame.id === 0x18DAF110 || frame.id === 0x7E8) {
+      isoTpRef.current?.processFrame(frame.id, frame.data);
     }
   }, []);
 
@@ -400,11 +411,31 @@ export function App() {
         source={source}
         onSourceChange={(s) => {
           setSource(s);
+          // Stop running sources cleanly
+          virtualBusRef.current?.stop();
+          webSerialRef.current?.disconnect();
+          webSocketRef.current?.disconnect();
+          setIsReplaying(false);
+
           if (s === 'virtual') {
-            setIsReplaying(false);
             if (isRunning) virtualBusRef.current?.start(handleIncomingFrame);
-          } else {
-            virtualBusRef.current?.stop();
+          } else if (s === 'webserial') {
+            webSerialRef.current = new WebSerialCanAdapter(activeDbcMessages);
+            webSerialRef.current
+              .connect(115200, handleIncomingFrame)
+              .catch((err: any) => {
+                alert('WebSerial connection error: ' + err.message);
+                setSource('virtual');
+                virtualBusRef.current?.start(handleIncomingFrame);
+              });
+          } else if (s === 'websocket') {
+            webSocketRef.current = new WebSocketStreamClient({
+              url: 'ws://localhost:8000/ws/live',
+              onFrame: handleIncomingFrame,
+              onStats: (newStats) => setStats((prev) => ({ ...prev, ...newStats })),
+              dbcMessages: activeDbcMessages,
+            });
+            webSocketRef.current.connect();
           }
         }}
         showAttitudeHud={showAttitudeHud}
