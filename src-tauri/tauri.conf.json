@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/v2/config.json",
+  "productName": "moto-analyzer",
+  "version": "0.1.0",
+  "identifier": "com.motoplatform.analyzer",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "moto-analyzer — Automotive CAN & Telemetry Cockpit (Honda CL250 SDV)",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Real-time Automotive CAN Bus Analyzer & Telemetry Cockpit",
+    "longDescription": "High-integrity automotive diagnostic and telemetry platform calibrated for Honda CL250 and open motorcycle SDV architectures."
+  }
+}
