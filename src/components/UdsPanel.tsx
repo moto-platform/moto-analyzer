@@ -18,7 +18,11 @@ import {
   composeUdsRequest,
   generateIsoTpLadderTrace,
   IsoTpLadderStep,
+  UDS_REQUEST_ID,
+  UDS_RESPONSE_ID,
 } from '../services/udsComposer';
+
+const hexId = (id: number) => `0x${id.toString(16).toUpperCase()}`;
 
 interface UdsLogEntry {
   timestamp: string;
@@ -31,15 +35,15 @@ interface UdsLogEntry {
 export const UdsPanel: React.FC = () => {
   const [selectedSid, setSelectedSid] = useState<number>(0x22);
   const [selectedSubFunction, setSelectedSubFunction] = useState<number>(0x03);
-  const [selectedDid, setSelectedDid] = useState<string>('0xF190');
+  const [selectedDid, setSelectedDid] = useState<string>('0xF40C');
   const [customDidHex, setCustomDidHex] = useState<string>('0xFD01');
   const [useCustomDid, setUseCustomDid] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'composer' | 'dtcs'>('composer');
 
   // Active ISO-TP Ladder sequence
   const [ladderSteps, setLadderSteps] = useState<IsoTpLadderStep[]>(() => {
-    const initialReq = composeUdsRequest(0x22, undefined, [0xF1, 0x90]);
-    return generateIsoTpLadderTrace(initialReq, 'VIN');
+    const initialReq = composeUdsRequest(0x22, undefined, [0xF4, 0x0C]);
+    return generateIsoTpLadderTrace(initialReq, 'ENGINE_SPEED');
   });
 
   const [udsLogs, setUdsLogs] = useState<UdsLogEntry[]>([
@@ -56,20 +60,6 @@ export const UdsPanel: React.FC = () => {
       service: '0x50 PositiveResponse',
       dataHex: '50 03 00 32 01 F4',
       decodedDesc: 'Session accepted. P2=50ms, P2*=500ms',
-    },
-    {
-      timestamp: '14:20:06.010',
-      type: 'req',
-      service: '0x22 ReadDataByIdentifier',
-      dataHex: '22 F1 90 (VIN)',
-      decodedDesc: 'Multi-frame ISO-TP read of Vehicle Identification Number',
-    },
-    {
-      timestamp: '14:20:06.040',
-      type: 'resp',
-      service: '0x62 PositiveResponse',
-      dataHex: '62 F1 90 4A 48 32 4D 43 35 38 31 32 33 34 35 36 37 38',
-      decodedDesc: 'VIN = "JH2MC5812345678" (Honda CL250 SDV Prototype)',
     },
   ]);
 
@@ -138,7 +128,7 @@ export const UdsPanel: React.FC = () => {
       type: 'req',
       service: `0x${selectedSid.toString(16).toUpperCase()} ${currentServiceDef?.name || ''}`,
       dataHex: compiled.rawPayload.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
-      decodedDesc: `ISO-TP Transmit on 0x18DAF110 (${compiled.isoTpType})`,
+      decodedDesc: `ISO-TP request on ${hexId(UDS_REQUEST_ID)} (${compiled.isoTpType})`,
     };
 
     setUdsLogs((prev) => [...prev, reqLog]);
@@ -198,7 +188,12 @@ export const UdsPanel: React.FC = () => {
 
                 <select
                   value={selectedSid}
-                  onChange={(e) => setSelectedSid(parseInt(e.target.value))}
+                  onChange={(e) => {
+                    const sid = parseInt(e.target.value);
+                    setSelectedSid(sid);
+                    const svc = UDS_SERVICES_CATALOG.find((x) => x.sid === sid);
+                    if (svc?.subFunctions?.length) setSelectedSubFunction(svc.subFunctions[0].id);
+                  }}
                   className="bg-background border border-surface-border rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
                 >
                   {UDS_SERVICES_CATALOG.map((svc) => (
@@ -255,9 +250,9 @@ export const UdsPanel: React.FC = () => {
                         onChange={(e) => setSelectedDid(e.target.value)}
                         className="bg-background border border-surface-border rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
                       >
-                        <option value="0xF190">0xF190 — VIN (Multi-Frame ISO-TP, 20 Bytes)</option>
-                        <option value="0xFD01">0xFD01 — Engine State & RPM (CL250 Primary)</option>
-                        <option value="0xFD03">0xFD03 — Lean Angle Health (Safety Node IMU)</option>
+                        <option value="0xF40C">0xF40C — ENGINE_SPEED</option>
+                        <option value="0xF40D">0xF40D — VEHICLE_SPEED</option>
+                        <option value="0xF405">0xF405 — COOLANT_TEMP</option>
                         <option value="0xF187">0xF187 — ECU Hardware Part Number</option>
                         <option value="0xF189">0xF189 — ECU Calibration Software Number</option>
                       </select>
@@ -364,8 +359,8 @@ export const UdsPanel: React.FC = () => {
 
             {/* Sequence Ladder Rails */}
             <div className="flex items-center justify-between px-6 text-[11px] font-semibold text-slate-400 border-b border-surface-border/40 pb-1">
-              <span className="text-cyan-400">TESTER CLIENT [0x18DAF110]</span>
-              <span className="text-emerald-400">CL250 ECU [0x18DA10F1]</span>
+              <span className="text-cyan-400">TESTER CLIENT [{hexId(UDS_REQUEST_ID)}]</span>
+              <span className="text-emerald-400">CL250 ECU [{hexId(UDS_RESPONSE_ID)}]</span>
             </div>
 
             {/* Steps Container */}
@@ -438,7 +433,7 @@ export const UdsPanel: React.FC = () => {
                 <Terminal className="w-3.5 h-3.5 text-cyan-400" />
                 <span>Diagnostic Transaction Log</span>
               </div>
-              <span className="text-[10px] text-slate-500 font-mono">Filtered 0x18DAF110</span>
+              <span className="text-[10px] text-slate-500 font-mono">Filtered {hexId(UDS_REQUEST_ID)} / {hexId(UDS_RESPONSE_ID)}</span>
             </div>
 
             <div className="flex-1 overflow-y-auto flex flex-col gap-1.5 text-[11px] font-mono">

@@ -48,7 +48,11 @@ export interface ByteSnifferRecord {
   notchedBytes: boolean[]; // When true, changes on this byte are ignored
   lastUpdated: number;
   frameHistory: { timestamp: number; data: number[] }[];
-  bitFlips: number[]; // 64 bit flip counters
+  bitFlips: number[]; // 64 bit flip counters, index = byte * 8 + (7 - bit)
+  /** Last change direction per byte: +1 up, -1 down, 0 none yet. */
+  lastDirections: number[];
+  /** Frames compared for the flip counters (first frame of an ID is not a comparison). */
+  framesCompared: number;
 }
 
 export interface DtcRecord {

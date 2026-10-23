@@ -8,6 +8,7 @@ import {
   captureBrandedSnapshot,
   CsvExportChannel,
 } from '../services/mathChannels';
+import { formatValue } from '../services/format';
 
 interface ChannelConfig {
   name: string;
@@ -246,14 +247,14 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
         ctx.setLineDash([4, 4]);
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(cursorA, 0);
-        ctx.lineTo(cursorA, height);
+        ctx.moveTo(cursorA * width, 0);
+        ctx.lineTo(cursorA * width, height);
         ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.fillStyle = '#f59e0b';
         ctx.font = '10px monospace';
-        ctx.fillText('Cursor A', cursorA + 4, 15);
+        ctx.fillText('Cursor A', cursorA * width + 4, 15);
       }
 
       if (cursorB !== null) {
@@ -261,14 +262,14 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
         ctx.setLineDash([4, 4]);
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(cursorB, 0);
-        ctx.lineTo(cursorB, height);
+        ctx.moveTo(cursorB * width, 0);
+        ctx.lineTo(cursorB * width, height);
         ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.fillStyle = '#06b6d4';
         ctx.font = '10px monospace';
-        ctx.fillText('Cursor B', cursorB + 4, 30);
+        ctx.fillText('Cursor B', cursorB * width + 4, 30);
       }
 
       animationFrameId = requestAnimationFrame(render);
@@ -281,9 +282,20 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
     };
   }, [signalsHistory, channels, mathChannels, computedMathSeries, timeWindowSec, cursorA, cursorB]);
 
+  // Time at a cursor (fraction of the window), using the same window end as the plot.
+  const latestTimeOverall = useMemo(() => {
+    let t = 0;
+    signalsHistory.forEach((pts) => {
+      if (pts.length > 0 && pts[pts.length - 1].time > t) t = pts[pts.length - 1].time;
+    });
+    return t;
+  }, [signalsHistory]);
+  const cursorTime = (frac: number) => Math.max(0, latestTimeOverall - timeWindowSec) + frac * timeWindowSec;
+
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
+    // Cursors are kept as a fraction of the plot width, independent of the CSS size.
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
 
     if (activeCursor === 'A') {
       setCursorA(x);
@@ -318,7 +330,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
               >
                 {ch.enabled ? <CheckSquare className="w-3.5 h-3.5" style={{ color: ch.color }} /> : <Square className="w-3.5 h-3.5" />}
                 <span>{ch.label}:</span>
-                <strong style={{ color: ch.color }}>{latest}</strong>
+                <strong style={{ color: ch.color }}>{formatValue(latest)}</strong>
                 <span className="text-[10px] text-slate-400">{ch.unit}</span>
               </button>
             );
@@ -421,7 +433,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
               >
                 {mCh.enabled ? <CheckSquare className="w-3.5 h-3.5" style={{ color: mCh.color }} /> : <Square className="w-3.5 h-3.5" />}
                 <span>{mCh.label}:</span>
-                <strong style={{ color: mCh.color }}>{latest}</strong>
+                <strong style={{ color: mCh.color }}>{formatValue(latest)}</strong>
                 <span className="text-[10px] text-slate-400">{mCh.unit}</span>
               </button>
             );
@@ -445,16 +457,16 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ signalsHis
             <div className="font-semibold text-slate-200 text-[11px] border-b border-surface-border pb-1">Dual Cursor Telemetry</div>
             <div className="flex items-center justify-between gap-4">
               <span className="text-amber-400 font-medium">Cursor A:</span>
-              <span className="text-slate-300">{cursorA !== null ? `${cursorA.toFixed(0)} px` : 'Unset'}</span>
+              <span className="text-slate-300">{cursorA !== null ? `${cursorTime(cursorA).toFixed(3)} s` : 'Unset'}</span>
             </div>
             <div className="flex items-center justify-between gap-4">
               <span className="text-cyan-400 font-medium">Cursor B:</span>
-              <span className="text-slate-300">{cursorB !== null ? `${cursorB.toFixed(0)} px` : 'Unset'}</span>
+              <span className="text-slate-300">{cursorB !== null ? `${cursorTime(cursorB).toFixed(3)} s` : 'Unset'}</span>
             </div>
             {cursorA !== null && cursorB !== null && (
               <div className="flex items-center justify-between gap-4 border-t border-surface-border/60 pt-1 mt-1 font-semibold text-emerald-400">
                 <span>ΔX (Time Offset):</span>
-                <span>{Math.abs(((cursorB - cursorA) / 1200) * timeWindowSec * 1000).toFixed(1)} ms</span>
+                <span>{Math.abs((cursorB - cursorA) * timeWindowSec * 1000).toFixed(1)} ms</span>
               </div>
             )}
           </div>

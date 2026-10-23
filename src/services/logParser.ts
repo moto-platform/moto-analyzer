@@ -1,5 +1,6 @@
 import { CanFrame, DbcMessageDef } from '../types/can';
 import { decodeFrameSignals } from './dbcParser';
+import { ascChannelToBus } from './exportService';
 
 /**
  * Parses Vector ASCII (.asc) file format into CanFrame array
@@ -9,10 +10,9 @@ import { decodeFrameSignals } from './dbcParser';
 export function parseVectorAsc(ascText: string, dbcMessages: DbcMessageDef[]): CanFrame[] {
   const lines = ascText.split('\n');
   const frames: CanFrame[] = [];
-  let prevTimestamp = 0;
 
-  // Regex matches: timestamp channel id Rx/Tx d dlc data...
-  const ascRegex = /^\s*([0-9.]+)\s+(\d+)\s+([0-9a-fA-Fx]+)\s+(Rx|Tx)\s+d\s+(\d+)\s+([0-9a-fA-F ]+)/;
+  // timestamp channel id Rx/Tx d dlc data...  (data optional for DLC 0)
+  const ascRegex = /^\s*([0-9.]+)\s+(\d+)\s+((?:0x)?[0-9a-fA-F]+x?)\s+(Rx|Tx)\s+d\s+(\d+)((?:\s+[0-9a-fA-F]{2})*)/;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -25,32 +25,31 @@ export function parseVectorAsc(ascText: string, dbcMessages: DbcMessageDef[]): C
       const timestamp = parseFloat(match[1]);
       const rawId = match[3].toLowerCase();
       const isExtended = rawId.endsWith('x');
-      const cleanIdStr = isExtended ? rawId.slice(0, -1) : rawId;
-      const id = cleanIdStr.startsWith('0x') ? parseInt(cleanIdStr, 16) : parseInt(cleanIdStr, 16);
+      const cleanIdStr = (isExtended ? rawId.slice(0, -1) : rawId).replace(/^0x/, '');
+      const id = parseInt(cleanIdStr, 16);
       const dlc = parseInt(match[5], 10);
       const dataBytes = match[6]
         .trim()
         .split(/\s+/)
+        .filter((hex) => hex.length > 0)
         .map((hex) => parseInt(hex, 16))
-        .filter((n) => !isNaN(n));
+        .slice(0, dlc);
+      const bus = ascChannelToBus(parseInt(match[2], 10));
 
-      const deltaMs = prevTimestamp > 0 ? Number(((timestamp - prevTimestamp) * 1000).toFixed(2)) : 20.0;
-      prevTimestamp = timestamp;
-
-      const messageDef = dbcMessages.find((m) => m.id === id);
+      const messageDef = bus === 'vehicle' ? undefined : dbcMessages.find((m) => m.id === id);
       const decodedSignals = decodeFrameSignals(dataBytes, messageDef);
 
       frames.push({
         id,
-        idHex: `0x${id.toString(16).toUpperCase().padStart(3, '0')}`,
-        bus: 'can0',
+        idHex: `0x${id.toString(16).toUpperCase().padStart(isExtended ? 8 : 3, '0')}`,
+        bus,
         dlc,
         data: dataBytes,
-        timestamp: Number(timestamp.toFixed(4)),
-        deltaMs,
+        timestamp,
+        deltaMs: 0,
         isExtended,
-        periodMs: deltaMs,
-        frequencyHz: deltaMs > 0 ? Number((1000 / deltaMs).toFixed(1)) : 50.0,
+        periodMs: 0,
+        frequencyHz: 0,
         count: 1,
         name: messageDef ? messageDef.name : undefined,
         decodedSignals,
@@ -76,32 +75,34 @@ export function parseCanCsv(csvText: string, dbcMessages: DbcMessageDef[]): CanF
     const parts = line.split(',');
     if (parts.length >= 7) {
       const timestamp = parseFloat(parts[0]);
-      const deltaMs = parseFloat(parts[1]) || 20.0;
       const bus = parts[2] || 'can0';
       const idHex = parts[3].trim();
       const id = parseInt(idHex.replace('0x', ''), 16);
-      const dlc = parseInt(parts[5], 10) || 8;
       const dataHex = parts[6].replace(/[^0-9a-fA-F]/g, '');
+      const dlcParsed = parseInt(parts[5], 10);
+      const dlc = Number.isFinite(dlcParsed) ? dlcParsed : dataHex.length / 2;
 
       const dataBytes: number[] = [];
       for (let b = 0; b < dataHex.length; b += 2) {
         dataBytes.push(parseInt(dataHex.substr(b, 2), 16));
       }
 
-      const messageDef = dbcMessages.find((m) => m.id === id);
+      if (!Number.isFinite(timestamp) || !Number.isFinite(id)) continue;
+      const isExtended = id > 0x7ff;
+      const messageDef = bus === 'vehicle' ? undefined : dbcMessages.find((m) => m.id === id);
       const decodedSignals = decodeFrameSignals(dataBytes, messageDef);
 
       frames.push({
         id,
-        idHex: idHex.toUpperCase(),
+        idHex: `0x${id.toString(16).toUpperCase().padStart(isExtended ? 8 : 3, '0')}`,
         bus,
         dlc,
         data: dataBytes,
         timestamp,
-        deltaMs,
-        isExtended: id > 0x7FF,
-        periodMs: deltaMs,
-        frequencyHz: deltaMs > 0 ? Number((1000 / deltaMs).toFixed(1)) : 50.0,
+        deltaMs: 0,
+        isExtended,
+        periodMs: 0,
+        frequencyHz: 0,
         count: 1,
         name: messageDef ? messageDef.name : parts[4].replace(/"/g, ''),
         decodedSignals,

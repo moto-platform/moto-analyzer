@@ -14,7 +14,6 @@ export class WebSocketStreamClient {
   private options: WebSocketStreamOptions;
   private reconnectTimeoutId: any = null;
   private shouldReconnect: boolean = true;
-  private lastTimeMs: number = 0;
 
   constructor(options: WebSocketStreamOptions) {
     this.options = options;
@@ -95,52 +94,105 @@ export class WebSocketStreamClient {
     }
   }
 
-  private handleIncomingMessage(msg: any) {
-    // 1. Single frame format
-    if (msg.id !== undefined && msg.data !== undefined) {
-      this.emitFrame(msg);
-      return;
-    }
+  private handleIncomingMessage(msg: unknown) {
+    const parsed = parseStreamMessage(msg, this.options.dbcMessages);
+    parsed.frames.forEach((f) => this.options.onFrame(f));
+    if (parsed.stats && this.options.onStats) this.options.onStats(parsed.stats);
+  }
+}
 
-    // 2. Batch format (StreamBatchDto)
-    if (msg.frames && Array.isArray(msg.frames)) {
-      for (const f of msg.frames) {
-        this.emitFrame(f);
+/** moto-server channel index (CanFrameDto.channel): 1 = vehicle bus, 2 = platform bus. */
+export function channelToBus(channel: unknown): string {
+  if (channel === 1) return 'vehicle';
+  if (channel === 2) return 'platform';
+  return typeof channel === 'number' ? `can${channel}` : 'can0';
+}
+
+function hexToBytes(hex: string): number[] | null {
+  const clean = hex.replace(/\s+/g, '');
+  if (clean.length % 2 !== 0 || (clean.length > 0 && !/^[0-9a-fA-F]+$/.test(clean))) return null;
+  const out: number[] = [];
+  for (let i = 0; i < clean.length; i += 2) out.push(parseInt(clean.substring(i, i + 2), 16));
+  return out;
+}
+
+/** Converts one moto-server CanFrameDto (schemas/stream.py) into a CanFrame. */
+export function frameFromDto(raw: any, dbcMessages: DbcMessageDef[]): CanFrame | null {
+  if (!raw || typeof raw !== 'object' || typeof raw.id !== 'number') return null;
+  const data = typeof raw.data_hex === 'string' ? hexToBytes(raw.data_hex) : null;
+  if (!data) return null;
+  const id: number = raw.id;
+  const isExtended = raw.is_extended === true;
+  const bus = channelToBus(raw.channel);
+  // Platform DBC decoding applies to platform-bus frames (and to frames of unknown channel).
+  const messageDef = bus === 'vehicle' ? undefined : dbcMessages.find((m) => m.id === id);
+  return {
+    id,
+    idHex: `0x${id.toString(16).toUpperCase().padStart(isExtended ? 8 : 3, '0')}`,
+    bus,
+    dlc: typeof raw.dlc === 'number' ? raw.dlc : data.length,
+    data,
+    timestamp: typeof raw.timestamp_us === 'number' ? raw.timestamp_us / 1e6 : performance.now() / 1000,
+    deltaMs: 0,
+    isExtended,
+    periodMs: 0,
+    frequencyHz: 0,
+    count: 1,
+    name: messageDef?.name,
+    decodedSignals: decodeFrameSignals(data, messageDef),
+  };
+}
+
+function statsFromDto(raw: any): Partial<BusStats> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Partial<BusStats> = {};
+  if (typeof raw.bus_load_pct === 'number') out.busLoadPct = raw.bus_load_pct;
+  if (typeof raw.frame_rate_hz === 'number') out.msgPerSec = raw.frame_rate_hz;
+  if (typeof raw.error_frames === 'number') out.errorFrames = raw.error_frames;
+  return out;
+}
+
+/**
+ * Parses one WebSocket message of the moto-server stream protocol: a StreamMessageDto
+ * envelope ({type, payload}) carrying a frame, a batch or stats. A bare StreamBatchDto
+ * or CanFrameDto is accepted too. Unknown or malformed content yields nothing.
+ */
+export function parseStreamMessage(
+  msg: unknown,
+  dbcMessages: DbcMessageDef[]
+): { frames: CanFrame[]; stats?: Partial<BusStats> } {
+  const result: { frames: CanFrame[]; stats?: Partial<BusStats> } = { frames: [] };
+  if (!msg || typeof msg !== 'object') return result;
+  const m: any = msg;
+
+  const handleBatch = (batch: any) => {
+    if (Array.isArray(batch?.frames)) {
+      for (const f of batch.frames) {
+        const frame = frameFromDto(f, dbcMessages);
+        if (frame) result.frames.push(frame);
       }
     }
+    if (batch?.stats) result.stats = statsFromDto(batch.stats);
+  };
 
-    // 3. Stats update
-    if (msg.stats && this.options.onStats) {
-      this.options.onStats(msg.stats);
+  if (typeof m.type === 'string' && 'payload' in m) {
+    if (m.type === 'frame') {
+      const frame = frameFromDto(m.payload, dbcMessages);
+      if (frame) result.frames.push(frame);
+    } else if (m.type === 'batch') {
+      handleBatch(m.payload);
+    } else if (m.type === 'stats') {
+      result.stats = statsFromDto(m.payload);
     }
+    return result;
   }
 
-  private emitFrame(raw: any) {
-    const id = typeof raw.id === 'string' ? parseInt(raw.id.replace('0x', ''), 16) : raw.id;
-    const dataBytes = Array.isArray(raw.data) ? raw.data : [];
-    const now = performance.now();
-    const deltaMs = this.lastTimeMs > 0 ? Number((now - this.lastTimeMs).toFixed(2)) : 20.0;
-    this.lastTimeMs = now;
-
-    const messageDef = this.options.dbcMessages.find((m) => m.id === id);
-    const decodedSignals = decodeFrameSignals(dataBytes, messageDef);
-
-    const frame: CanFrame = {
-      id,
-      idHex: `0x${id.toString(16).toUpperCase().padStart(id > 0x7FF ? 8 : 3, '0')}`,
-      bus: raw.bus || 'can0',
-      dlc: dataBytes.length,
-      data: dataBytes,
-      timestamp: raw.timestamp || Number((now / 1000).toFixed(4)),
-      deltaMs: raw.delta_ms || deltaMs,
-      isExtended: id > 0x7FF,
-      periodMs: deltaMs,
-      frequencyHz: deltaMs > 0 ? Number((1000 / deltaMs).toFixed(1)) : 50.0,
-      count: 1,
-      name: messageDef ? messageDef.name : raw.name,
-      decodedSignals,
-    };
-
-    this.options.onFrame(frame);
+  if (Array.isArray(m.frames)) {
+    handleBatch(m);
+    return result;
   }
+
+  const frame = frameFromDto(m, dbcMessages);
+  if (frame) result.frames.push(frame);
+  return result;
 }

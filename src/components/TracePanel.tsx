@@ -1,17 +1,21 @@
 import React, { useState, useMemo } from 'react';
 import { Search, Layers, List, Download, ArrowUpDown, ShieldAlert } from 'lucide-react';
 import { CanFrame, TraceMode } from '../types/can';
+import { formatValue } from '../services/format';
 import { exportToVectorAsc, exportToCsv, exportToJson, downloadFile } from '../services/exportService';
 
 interface TracePanelProps {
   framesMap: Map<number, CanFrame>; // For Overwrite mode
   framesLog: CanFrame[]; // For Scroll mode
-  onTriggerPause?: () => void;
+  /** True while a pause trigger is armed. */
+  triggerArmed: boolean;
+  /** Arms the trigger on a CAN ID (the next frame with it pauses the stream), or disarms it. */
+  onArmTrigger: (id: number | null) => void;
 }
 
 type SortField = 'id' | 'name' | 'period' | 'freq' | 'count';
 
-export const TracePanel: React.FC<TracePanelProps> = ({ framesMap, framesLog, onTriggerPause }) => {
+export const TracePanel: React.FC<TracePanelProps> = ({ framesMap, framesLog, triggerArmed, onArmTrigger }) => {
   const [mode, setMode] = useState<TraceMode>('overwrite');
   const [filterQuery, setFilterQuery] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
@@ -20,18 +24,17 @@ export const TracePanel: React.FC<TracePanelProps> = ({ framesMap, framesLog, on
 
   // Trigger setup
   const [triggerId, setTriggerId] = useState<string>('');
-  const [isTriggerActive, setIsTriggerActive] = useState(false);
+  const isTriggerActive = triggerArmed;
   const [showExportMenu, setShowExportMenu] = useState(false);
 
-  // Check if incoming frame satisfies trigger
-  useMemo(() => {
-    if (!isTriggerActive || !triggerId || !onTriggerPause) return;
-    const parsedId = parseInt(triggerId, 16);
-    if (!isNaN(parsedId) && framesMap.has(parsedId)) {
-      onTriggerPause();
-      setIsTriggerActive(false); // Trip trigger once
+  const toggleTrigger = () => {
+    if (isTriggerActive) {
+      onArmTrigger(null);
+      return;
     }
-  }, [framesMap, isTriggerActive, triggerId, onTriggerPause]);
+    const parsedId = parseInt(triggerId.trim().replace(/^0x/i, ''), 16);
+    if (!isNaN(parsedId)) onArmTrigger(parsedId);
+  };
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -166,7 +169,7 @@ export const TracePanel: React.FC<TracePanelProps> = ({ framesMap, framesLog, on
               className="bg-transparent text-cyan-300 font-mono w-14 focus:outline-none text-[11px]"
             />
             <button
-              onClick={() => setIsTriggerActive(!isTriggerActive)}
+              onClick={toggleTrigger}
               className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
                 isTriggerActive
                   ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
@@ -337,7 +340,7 @@ export const TracePanel: React.FC<TracePanelProps> = ({ framesMap, framesLog, on
                               className="inline-flex items-center gap-1 bg-surface-elevated/60 px-1.5 py-0.5 rounded border border-surface-border text-[10px]"
                             >
                               <span className="text-slate-400">{k}:</span>
-                              <strong className="text-cyan-300">{v}</strong>
+                              <strong className="text-cyan-300">{formatValue(v)}</strong>
                             </span>
                           ))}
                         </div>
@@ -395,7 +398,7 @@ export const TracePanel: React.FC<TracePanelProps> = ({ framesMap, framesLog, on
                     <td className="py-1 px-3 text-slate-300 truncate max-w-sm text-[10px]">
                       {frame.decodedSignals && Object.keys(frame.decodedSignals).length > 0 ? (
                         <span className="text-cyan-300">
-                          {Object.entries(frame.decodedSignals).map(([k, v]) => `${k}=${v}`).join(', ')}
+                          {Object.entries(frame.decodedSignals).map(([k, v]) => `${k}=${formatValue(v)}`).join(', ')}
                         </span>
                       ) : (
                         <span className="text-slate-600">-</span>

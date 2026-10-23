@@ -14,7 +14,6 @@ import {
   BusStats,
   TelemetrySource,
   ByteSnifferRecord,
-  ByteActivityStatus,
   DbcMessageDef,
 } from './types/can';
 import { VirtualCanBus } from './services/virtualBus';
@@ -22,6 +21,14 @@ import { DEFAULT_MOTO_MESSAGES } from './services/dbcParser';
 import { WebSerialCanAdapter } from './services/webSerialCan';
 import { WebSocketStreamClient } from './services/streamClient';
 import { IsoTpReassembler } from './services/isoTp';
+import { FrameTimingTracker, BusLoadMeter } from './services/capture';
+import { updateSnifferRecord } from './services/sniffer';
+import { UDS_REQUEST_ID, UDS_RESPONSE_ID } from './services/udsComposer';
+
+/** Frames replayed silently to rebuild the views after a backward seek. */
+const REPLAY_REBUILD_WINDOW = 500;
+/** Longest real wait between two replayed frames (a gap in the log is not waited out). */
+const REPLAY_MAX_GAP_MS = 1000;
 
 export function App() {
   const [activeTab, setActiveTab] = useState<CockpitTab>('trace');
@@ -69,7 +76,7 @@ export function App() {
 
   // Telemetry stats
   const [stats, setStats] = useState<BusStats>({
-    busLoadPct: 32.4,
+    busLoadPct: 0,
     msgPerSec: 0,
     errorFrames: 0,
     totalRx: 0,
@@ -79,13 +86,28 @@ export function App() {
   const virtualBusRef = useRef<VirtualCanBus | null>(null);
   const webSerialRef = useRef<WebSerialCanAdapter | null>(null);
   const webSocketRef = useRef<WebSocketStreamClient | null>(null);
-  const isoTpRef = useRef<IsoTpReassembler | null>(null);
+  const isoTpRef = useRef<IsoTpReassembler>(new IsoTpReassembler());
+  const timingRef = useRef<FrameTimingTracker>(new FrameTimingTracker());
+  const busLoadRef = useRef<BusLoadMeter>(new BusLoadMeter());
+  const triggerIdRef = useRef<number | null>(null);
+  const [triggerArmed, setTriggerArmed] = useState<boolean>(false);
+  const pauseRef = useRef<() => void>(() => undefined);
   const rxCounterRef = useRef<number>(0);
   const startTimeRef = useRef<number>(Date.now());
 
-  // Frame processing callback
-  const handleIncomingFrame = useCallback((frame: CanFrame) => {
+  // Frame processing callback. Side effects (counters, trigger, ISO-TP) run here once
+  // per frame, never inside a state updater: React may call updaters twice.
+  const handleIncomingFrame = useCallback((incoming: CanFrame) => {
+    const frame = timingRef.current.stamp(incoming);
     rxCounterRef.current += 1;
+    busLoadRef.current.add(frame);
+
+    // Pause-on-trigger: fires on the first matching frame after arming.
+    if (triggerIdRef.current !== null && frame.id === triggerIdRef.current) {
+      triggerIdRef.current = null;
+      setTriggerArmed(false);
+      pauseRef.current();
+    }
 
     // Update dynamics if frame is 0x021
     if (frame.id === 0x021 && frame.decodedSignals) {
@@ -139,7 +161,6 @@ export function App() {
 
       next.set(frame.id, {
         ...frame,
-        count: existing ? existing.count + 1 : 1,
         prevData: existing ? existing.data : undefined,
         changedBytes: existing ? changedBytes : undefined,
       });
@@ -156,65 +177,7 @@ export function App() {
     // 3. Update SavvyCAN Byte Sniffer Heatmap
     setSnifferMap((prev) => {
       const next = new Map(prev);
-      const existing = next.get(frame.id);
-
-      const byteStatuses: ByteActivityStatus[] = [];
-      const changeCounts: number[] = existing ? [...existing.changeCounts] : Array(8).fill(0);
-      const notchedBytes: boolean[] = existing ? [...existing.notchedBytes] : Array(8).fill(false);
-
-      for (let i = 0; i < 8; i++) {
-        const currentByte = frame.data[i] ?? 0;
-        const prevByte = existing ? existing.currentBytes[i] ?? currentByte : currentByte;
-
-        if (currentByte === prevByte) {
-          byteStatuses.push('static');
-        } else if (currentByte > prevByte) {
-          byteStatuses.push('inc');
-          changeCounts[i] = (changeCounts[i] || 0) + 1;
-        } else {
-          byteStatuses.push('dec');
-          changeCounts[i] = (changeCounts[i] || 0) + 1;
-        }
-      }
-
-      // 64-bit flip counters
-      const bitFlips = existing ? [...existing.bitFlips] : Array(64).fill(0);
-      if (existing) {
-        for (let b = 0; b < 8; b++) {
-          const cur = frame.data[b] ?? 0;
-          const prv = existing.currentBytes[b] ?? 0;
-          const xor = cur ^ prv;
-          if (xor !== 0) {
-            for (let bit = 0; bit < 8; bit++) {
-              if ((xor & (1 << bit)) !== 0) {
-                const bitIndex = b * 8 + (7 - bit);
-                bitFlips[bitIndex] = (bitFlips[bitIndex] || 0) + 1;
-              }
-            }
-          }
-        }
-      }
-
-      const frameHistory = existing
-        ? [...existing.frameHistory, { timestamp: frame.timestamp, data: frame.data }]
-        : [{ timestamp: frame.timestamp, data: frame.data }];
-      if (frameHistory.length > 16) frameHistory.shift();
-
-      next.set(frame.id, {
-        id: frame.id,
-        idHex: frame.idHex,
-        name: frame.name,
-        dlc: frame.dlc,
-        currentBytes: frame.data,
-        prevBytes: existing ? existing.currentBytes : frame.data,
-        byteStatuses,
-        changeCounts,
-        notchedBytes,
-        lastUpdated: performance.now(),
-        frameHistory,
-        bitFlips,
-      });
-
+      next.set(frame.id, updateSnifferRecord(prev.get(frame.id), frame));
       return next;
     });
 
@@ -235,8 +198,8 @@ export function App() {
     }
 
     // 5. Route diagnostic frames to ISO-TP reassembler
-    if (frame.id === 0x18DAF110 || frame.id === 0x7E8) {
-      isoTpRef.current?.processFrame(frame.id, frame.data);
+    if (frame.id === UDS_RESPONSE_ID || frame.id === UDS_REQUEST_ID) {
+      isoTpRef.current.processFrame(frame.id, frame.data, frame.timestamp * 1000);
     }
   }, []);
 
@@ -255,19 +218,24 @@ export function App() {
   }, [handleIncomingFrame]);
 
   // Handle play/pause
-  const togglePlay = () => {
-    setIsRunning((prev) => {
-      const next = !prev;
-      if (virtualBusRef.current) {
-        if (next && source === 'virtual') {
-          virtualBusRef.current.start(handleIncomingFrame);
-        } else {
-          virtualBusRef.current.stop();
-        }
-      }
-      return next;
-    });
-  };
+  const setRunning = useCallback(
+    (next: boolean) => {
+      setIsRunning(next);
+      if (!virtualBusRef.current) return;
+      if (next && source === 'virtual') virtualBusRef.current.start(handleIncomingFrame);
+      else virtualBusRef.current.stop();
+    },
+    [source, handleIncomingFrame]
+  );
+  const togglePlay = () => setRunning(!isRunning);
+
+  // The trigger pauses whatever is streaming: the live source and the replay.
+  useEffect(() => {
+    pauseRef.current = () => {
+      setRunning(false);
+      setIsReplaying(false);
+    };
+  }, [setRunning]);
 
   // Handle clear buffers
   const handleClear = () => {
@@ -276,6 +244,9 @@ export function App() {
     setSignalsHistory(new Map());
     setSnifferMap(new Map());
     rxCounterRef.current = 0;
+    timingRef.current.reset();
+    busLoadRef.current.reset();
+    isoTpRef.current.reset();
   };
 
   // Notch filter toggle in Sniffer
@@ -315,85 +286,119 @@ export function App() {
   };
 
   // Time Machine Log File Loader
+  const replayIndexRef = useRef<number>(0);
+  useEffect(() => {
+    replayIndexRef.current = replayIndex;
+  }, [replayIndex]);
+
   const handleLogLoaded = (frames: CanFrame[]) => {
-    setReplayFrames(frames);
-    setReplayIndex(0);
-    setSource('local_file');
-    setIsReplaying(false);
-    // Pause virtual bus when log is loaded
     virtualBusRef.current?.stop();
     setIsRunning(false);
-    // Feed the first frame
-    if (frames.length > 0) {
-      handleIncomingFrame(frames[0]);
-    }
+    setIsReplaying(false);
+    handleClear();
+    setReplayFrames(frames);
+    setReplayIndex(0);
+    replayIndexRef.current = 0;
+    setSource('local_file');
+    if (frames.length > 0) handleIncomingFrame(frames[0]);
   };
 
-  // Time Machine Playback Timer
+  // Time Machine playback: each frame is scheduled after the recorded gap to the
+  // previous one, divided by the speed. Frames closer than a timer tick go together.
   useEffect(() => {
     if (!isReplaying || replayFrames.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
 
-    const intervalMs = Math.max(5, 20 / playbackSpeed);
-    const interval = setInterval(() => {
-      setReplayIndex((prev) => {
-        if (prev + 1 >= replayFrames.length) {
-          setIsReplaying(false);
-          return prev;
-        }
-        const nextIndex = prev + 1;
-        handleIncomingFrame(replayFrames[nextIndex]);
-        return nextIndex;
-      });
-    }, intervalMs);
+    const step = () => {
+      if (cancelled) return;
+      let idx = replayIndexRef.current;
+      const startT = replayFrames[idx]?.timestamp ?? 0;
+      // Emit every frame due within the next 4 ms of log time (scaled).
+      while (idx + 1 < replayFrames.length) {
+        const gapMs = ((replayFrames[idx + 1].timestamp - startT) * 1000) / playbackSpeed;
+        if (gapMs > 4) break;
+        idx += 1;
+        handleIncomingFrame(replayFrames[idx]);
+      }
+      replayIndexRef.current = idx;
+      setReplayIndex(idx);
+      if (idx + 1 >= replayFrames.length) {
+        setIsReplaying(false);
+        return;
+      }
+      const waitMs = Math.min(
+        REPLAY_MAX_GAP_MS,
+        Math.max(0, ((replayFrames[idx + 1].timestamp - replayFrames[idx].timestamp) * 1000) / playbackSpeed)
+      );
+      timer = setTimeout(() => {
+        if (cancelled) return;
+        replayIndexRef.current = idx + 1;
+        handleIncomingFrame(replayFrames[idx + 1]);
+        step();
+      }, waitMs);
+    };
+    step();
 
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [isReplaying, replayFrames, playbackSpeed, handleIncomingFrame]);
 
-  // Handle manual scrub
-  const handleScrub = (index: number) => {
-    if (index >= 0 && index < replayFrames.length) {
-      setReplayIndex(index);
-      handleIncomingFrame(replayFrames[index]);
+  // Seek: forward seeks feed the skipped frames; backward seeks rebuild the views from
+  // a window before the target, so no view keeps frames from "the future".
+  const seekTo = (index: number) => {
+    if (index < 0 || index >= replayFrames.length) return;
+    const current = replayIndexRef.current;
+    if (index > current && index - current <= REPLAY_REBUILD_WINDOW) {
+      for (let i = current + 1; i <= index; i++) handleIncomingFrame(replayFrames[i]);
+    } else if (index !== current) {
+      handleClear();
+      for (let i = Math.max(0, index - REPLAY_REBUILD_WINDOW); i <= index; i++) handleIncomingFrame(replayFrames[i]);
     }
+    replayIndexRef.current = index;
+    setReplayIndex(index);
   };
 
-  // Step controls
-  const handleStepForward = () => {
-    if (replayIndex + 1 < replayFrames.length) {
-      const next = replayIndex + 1;
-      setReplayIndex(next);
-      handleIncomingFrame(replayFrames[next]);
-    }
-  };
+  const handleScrub = (index: number) => seekTo(index);
+  const handleStepForward = () => seekTo(replayIndexRef.current + 1);
+  const handleStepBackward = () => seekTo(replayIndexRef.current - 1);
 
-  const handleStepBackward = () => {
-    if (replayIndex - 1 >= 0) {
-      const prev = replayIndex - 1;
-      setReplayIndex(prev);
-      handleIncomingFrame(replayFrames[prev]);
-    }
-  };
-
-  // 1-second interval to update stats
+  // 1-second interval to update stats. Load is measured from the frames' wire bits
+  // per bus (the busiest bus is shown); replay time runs at the playback speed.
+  const playbackSpeedRef = useRef(playbackSpeed);
   useEffect(() => {
-    const interval = setInterval(() => {
-      const elapsedSec = (Date.now() - startTimeRef.current) / 1000;
-      const rate = rxCounterRef.current;
-      rxCounterRef.current = 0;
+    playbackSpeedRef.current = playbackSpeed;
+  }, [playbackSpeed]);
 
-      const calculatedLoad = Math.min(95, Math.max(12, (rate * 125 * 8 / 500000) * 100));
+  useEffect(() => {
+    let last = performance.now();
+    const interval = setInterval(() => {
+      const now = performance.now();
+      const wallSec = (now - last) / 1000;
+      last = now;
+      const elapsedSec = (Date.now() - startTimeRef.current) / 1000;
+      const count = rxCounterRef.current;
+      rxCounterRef.current = 0;
+      const sourceSec = wallSec * (isReplaying ? playbackSpeedRef.current : 1);
+      const perBus = busLoadRef.current.sample(sourceSec);
+      let busLoadPct = 0;
+      perBus.forEach((v) => {
+        busLoadPct = Math.max(busLoadPct, v.loadPct);
+      });
 
       setStats((prev) => ({
-        busLoadPct: isRunning || isReplaying ? calculatedLoad : 0,
-        msgPerSec: isRunning || isReplaying ? rate : 0,
-        errorFrames: 0,
-        totalRx: prev.totalRx + rate,
+        busLoadPct,
+        msgPerSec: Math.round(count / wallSec),
+        errorFrames: prev.errorFrames,
+        totalRx: prev.totalRx + count,
         uptimeSec: Math.floor(elapsedSec),
       }));
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isRunning, isReplaying]);
+  }, [isReplaying]);
 
   const currentReplayTime = replayFrames[replayIndex]?.timestamp || 0;
   const totalReplayDuration = replayFrames[replayFrames.length - 1]?.timestamp || 0;
@@ -449,9 +454,10 @@ export function App() {
             <TracePanel
               framesMap={framesMap}
               framesLog={framesLog}
-              onTriggerPause={() => {
-                if (isRunning) togglePlay();
-                if (isReplaying) setIsReplaying(false);
+              triggerArmed={triggerArmed}
+              onArmTrigger={(id) => {
+                triggerIdRef.current = id;
+                setTriggerArmed(id !== null);
               }}
             />
           )}

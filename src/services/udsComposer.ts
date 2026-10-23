@@ -11,8 +11,15 @@ export interface UdsServiceDef {
   name: string;
   isAllowed: boolean;
   subFunctions?: { id: number; name: string }[];
+  /** Sub-functions the tester policy allows (bit 7, suppressPosRsp, is ignored). Unset = no sub-function. */
+  allowedSubFunctions?: number[];
   description: string;
 }
+
+/** Tester (client) request ID and ECU (server) response ID, ISO 15765-4 normal fixed: 0x18DA<TA><SA>. */
+export const UDS_REQUEST_ID = 0x18da10f1;
+export const UDS_RESPONSE_ID = 0x18daf110;
+const SUPPRESS_POS_RSP_BIT = 0x80;
 
 export const UDS_SERVICES_CATALOG: UdsServiceDef[] = [
   {
@@ -24,6 +31,7 @@ export const UDS_SERVICES_CATALOG: UdsServiceDef[] = [
       { id: 0x01, name: '0x01 — DefaultSession' },
       { id: 0x03, name: '0x03 — ExtendedDiagnosticSession' },
     ],
+    allowedSubFunctions: [0x01, 0x03],
     description: 'Enables default or extended diagnostic test modes',
   },
   {
@@ -42,6 +50,7 @@ export const UDS_SERVICES_CATALOG: UdsServiceDef[] = [
       { id: 0x01, name: '0x01 — reportNumberOfDTCByStatusMask' },
       { id: 0x02, name: '0x02 — reportDTCByStatusMask' },
     ],
+    allowedSubFunctions: [0x01, 0x02],
     description: 'Retrieves active and stored diagnostic trouble codes and status masks',
   },
   {
@@ -50,6 +59,7 @@ export const UDS_SERVICES_CATALOG: UdsServiceDef[] = [
     name: 'TesterPresent',
     isAllowed: true,
     subFunctions: [{ id: 0x00, name: '0x00 — zeroSubFunction' }],
+    allowedSubFunctions: [0x00],
     description: 'Maintains active diagnostic session without timeout',
   },
   // Disallowed services (Blocked by Invariant 1)
@@ -138,6 +148,33 @@ export function composeUdsRequest(
     };
   }
 
+  // Sub-function gate: a service with sub-functions needs one from its allow-list,
+  // checked without the suppressPosRsp bit (0x10 0x02 programming session stays refused).
+  if (service.allowedSubFunctions) {
+    const sub = subFunction === undefined ? undefined : subFunction & ~SUPPRESS_POS_RSP_BIT;
+    if (sub === undefined || !service.allowedSubFunctions.includes(sub)) {
+      return {
+        valid: false,
+        isAllowed: false,
+        errorMessage: `BLOCKED BY PLATFORM INVARIANT 1: sub-function ${
+          subFunction === undefined ? '(none)' : '0x' + subFunction.toString(16).toUpperCase()
+        } of service 0x${sid.toString(16).toUpperCase()} is not in the tester policy.`,
+        rawPayload: [],
+        canFrameData: [],
+        isoTpType: 'SF',
+      };
+    }
+  } else if (subFunction !== undefined) {
+    return {
+      valid: false,
+      isAllowed: true,
+      errorMessage: `Service 0x${sid.toString(16).toUpperCase()} takes no sub-function.`,
+      rawPayload: [],
+      canFrameData: [],
+      isoTpType: 'SF',
+    };
+  }
+
   const payload: number[] = [sid];
 
   if (subFunction !== undefined) {
@@ -149,16 +186,14 @@ export function composeUdsRequest(
   }
 
   if (payload.length > 7) {
-    // Requires Multi-frame request (ISO-TP First Frame)
-    const pciHigh = 0x10 | ((payload.length >> 8) & 0x0F);
-    const pciLow = payload.length & 0xFF;
-    const canFrameData = [pciHigh, pciLow, ...payload.slice(0, 6)];
+    // Requests stay Single Frame (D-059): the frame gate refuses a tester First Frame.
     return {
-      valid: true,
-      isAllowed: true,
-      rawPayload: payload,
-      canFrameData,
-      isoTpType: 'FF',
+      valid: false,
+      isAllowed: false,
+      errorMessage: `Request of ${payload.length} bytes does not fit a Single Frame; the tester sends Single Frames only (D-059).`,
+      rawPayload: [],
+      canFrameData: [],
+      isoTpType: 'SF',
     };
   }
 
@@ -200,7 +235,7 @@ export function generateIsoTpLadderTrace(
     timestamp: formatTime(0),
     direction: 'tester_to_ecu',
     frameType: 'SF',
-    canIdHex: '0x18DAF110',
+    canIdHex: '0x18DA10F1',
     dataHex: request.canFrameData.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
     pciDesc: `Single Frame (SF, Len=${request.rawPayload.length})`,
     bytesReceived: request.rawPayload.length,
@@ -227,7 +262,7 @@ export function generateIsoTpLadderTrace(
       timestamp: formatTime(25),
       direction: 'ecu_to_tester',
       frameType: 'FF',
-      canIdHex: '0x18DA10F1',
+      canIdHex: '0x18DAF110',
       dataHex: ffData.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
       pciDesc: `First Frame (FF, Total Len=${totalLen}B, Payload: 6B)`,
       bytesReceived: 6,
@@ -242,7 +277,7 @@ export function generateIsoTpLadderTrace(
       timestamp: formatTime(30),
       direction: 'tester_to_ecu',
       frameType: 'FC',
-      canIdHex: '0x18DAF110',
+      canIdHex: '0x18DA10F1',
       dataHex: fcData.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
       pciDesc: 'Flow Control (FC: CTS, BlockSize=0, STmin=5ms)',
       bytesReceived: 6,
@@ -257,7 +292,7 @@ export function generateIsoTpLadderTrace(
       timestamp: formatTime(35),
       direction: 'ecu_to_tester',
       frameType: 'CF',
-      canIdHex: '0x18DA10F1',
+      canIdHex: '0x18DAF110',
       dataHex: cf1Data.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
       pciDesc: 'Consecutive Frame 1 (CF, Seq=1, +7B)',
       bytesReceived: 13,
@@ -273,7 +308,7 @@ export function generateIsoTpLadderTrace(
       timestamp: formatTime(40),
       direction: 'ecu_to_tester',
       frameType: 'CF',
-      canIdHex: '0x18DA10F1',
+      canIdHex: '0x18DAF110',
       dataHex: cf2Data.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
       pciDesc: 'Consecutive Frame 2 (CF, Seq=2, +7B) [REASSEMBLY COMPLETE]',
       bytesReceived: 20,
@@ -304,7 +339,7 @@ export function generateIsoTpLadderTrace(
     timestamp: formatTime(18),
     direction: 'ecu_to_tester',
     frameType: 'SF',
-    canIdHex: '0x18DA10F1',
+    canIdHex: '0x18DAF110',
     dataHex: sfRespData.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
     pciDesc: `Positive Response (SF, Len=${respPayload.length}) [0x${(sid + 0x40).toString(16).toUpperCase()} ${didName || ''}]`,
     bytesReceived: respPayload.length,

@@ -29,9 +29,14 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({
       const content = event.target?.result as string;
       if (content) {
         const parsed = parseDbcText(content);
+        if (parsed.length === 0) {
+          // Keep the active catalog: a DBC without messages (e.g. the cl250.dbc skeleton) defines nothing to decode.
+          setSyncStatus(`${file.name} defines no messages (BO_); the active catalog is unchanged.`);
+          return;
+        }
         onDbcLoaded(parsed);
         setSelectedMessage(parsed[0] || null);
-        setSyncStatus(`Successfully loaded ${parsed.length} message definitions from ${file.name}`);
+        setSyncStatus(`Loaded ${parsed.length} message definitions from ${file.name}`);
       }
     };
     reader.readAsText(file);

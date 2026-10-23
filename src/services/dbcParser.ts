@@ -68,26 +68,31 @@ export const DEFAULT_MOTO_MESSAGES: DbcMessageDef[] = [
 ];
 
 /**
- * In-browser DBC parser supporting BO_ (Messages) and SG_ (Signals)
+ * In-browser DBC parser supporting BO_ (Messages) and SG_ (Signals).
+ * Returns an empty list when the text holds no message: callers decide what to do,
+ * the parser never substitutes another catalog.
  */
 export function parseDbcText(dbcText: string): DbcMessageDef[] {
-  const lines = dbcText.split('\n');
+  const lines = dbcText.split(/\r?\n/);
   const messages: DbcMessageDef[] = [];
   let currentMsg: DbcMessageDef | null = null;
 
-  // Regex patterns
   // BO_ 32 EngineStatus: 8 ECU
-  const boRegex = /^BO_\s+(\d+)\s+([a-zA-Z0-9_]+)\s*:\s*(\d+)\s+([a-zA-Z0-9_]+)/;
-  // SG_ EngineSpeed : 0|16@1+ (0.25,0) [0|15000] "rpm" Vector__XXX
-  const sgRegex = /^\s*SG_\s+([a-zA-Z0-9_]+)\s*(?:m\d+)?\s*:\s*(\d+)\|(\d+)@([01])([+-])\s*\(([^,]+),([^)]+)\)\s*\[([^|]+)\|([^\]]+)\]\s*"([^"]*)"/;
+  const boRegex = /^BO_\s+(\d+)\s+([A-Za-z0-9_]+)\s*:\s*(\d+)\s+([A-Za-z0-9_]+)/;
+  // SG_ EngineSpeed [M|m0] : 0|16@1+ (0.25,0) [0|15000] "rpm" Vector__XXX
+  const sgRegex =
+    /^SG_\s+([A-Za-z0-9_]+)\s*(?:M|m\d+M?)?\s*:\s*(\d+)\|(\d+)@([01])([+-])\s*\(([^,]+),([^)]+)\)\s*\[([^|]+)\|([^\]]+)\]\s*"([^"]*)"/;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
 
     const boMatch = line.match(boRegex);
     if (boMatch) {
+      const rawId = Number(boMatch[1]);
+      // DBC marks a 29-bit identifier with bit 31 set.
+      const isExtended = rawId >= 0x80000000;
       currentMsg = {
-        id: parseInt(boMatch[1], 10),
+        id: isExtended ? rawId - 0x80000000 : rawId,
         name: boMatch[2],
         dlc: parseInt(boMatch[3], 10),
         sender: boMatch[4],
@@ -97,10 +102,15 @@ export function parseDbcText(dbcText: string): DbcMessageDef[] {
       continue;
     }
 
+    if (line === '' ) {
+      currentMsg = null;
+      continue;
+    }
+
     if (currentMsg) {
       const sgMatch = line.match(sgRegex);
       if (sgMatch) {
-        const signal: DbcSignalDef = {
+        currentMsg.signals.push({
           name: sgMatch[1],
           startBit: parseInt(sgMatch[2], 10),
           bitLength: parseInt(sgMatch[3], 10),
@@ -111,17 +121,55 @@ export function parseDbcText(dbcText: string): DbcMessageDef[] {
           min: parseFloat(sgMatch[8]),
           max: parseFloat(sgMatch[9]),
           unit: sgMatch[10],
-        };
-        currentMsg.signals.push(signal);
+        });
       }
     }
   }
 
-  return messages.length > 0 ? messages : DEFAULT_MOTO_MESSAGES;
+  return messages;
 }
 
 /**
- * Decodes raw CAN payload bytes using a message definition
+ * Extracts the raw (unscaled) value of a signal. Works for any length up to 52 bits
+ * without 32-bit overflow (no bitwise operators on the accumulated value).
+ * Returns null when the signal does not fit in the payload.
+ */
+export function extractRawValue(data: number[], sig: DbcSignalDef): number | null {
+  const len = sig.bitLength;
+  if (len <= 0 || len > 52) return null;
+
+  let raw = 0;
+  if (sig.isLittleEndian) {
+    // Intel: start bit is the LSB; bits go up through the bytes.
+    for (let i = len - 1; i >= 0; i--) {
+      const bitPos = sig.startBit + i;
+      const byteIdx = Math.floor(bitPos / 8);
+      if (byteIdx >= data.length) return null;
+      const bit = (data[byteIdx] >> (bitPos % 8)) & 1;
+      raw = raw * 2 + bit;
+    }
+  } else {
+    // Motorola: start bit is the MSB in DBC sawtooth numbering; walk down each byte,
+    // then continue at bit 7 of the next byte.
+    let bitPos = sig.startBit;
+    for (let i = 0; i < len; i++) {
+      const byteIdx = Math.floor(bitPos / 8);
+      if (byteIdx >= data.length) return null;
+      const bit = (data[byteIdx] >> (bitPos % 8)) & 1;
+      raw = raw * 2 + bit;
+      bitPos = bitPos % 8 === 0 ? bitPos + 15 : bitPos - 1;
+    }
+  }
+
+  if (sig.isSigned && raw >= 2 ** (len - 1)) {
+    raw -= 2 ** len;
+  }
+  return raw;
+}
+
+/**
+ * Decodes raw CAN payload bytes using a message definition. Values are full precision;
+ * formatting belongs to the UI.
  */
 export function decodeFrameSignals(
   data: number[],
@@ -132,49 +180,10 @@ export function decodeFrameSignals(
   }
 
   const result: Record<string, number | string> = {};
-
   for (const sig of messageDef.signals) {
-    let rawValue = 0;
-
-    if (sig.isLittleEndian) {
-      // Little-endian bit extraction
-      const startByte = Math.floor(sig.startBit / 8);
-      const startBitInByte = sig.startBit % 8;
-
-      if (startByte >= data.length) continue;
-
-      let bitsLeft = sig.bitLength;
-      let currentByteIdx = startByte;
-      let bitOffsetInResult = 0;
-
-      while (bitsLeft > 0 && currentByteIdx < data.length) {
-        const byteVal = data[currentByteIdx];
-        const bitShift = currentByteIdx === startByte ? startBitInByte : 0;
-        const bitsToTake = Math.min(8 - bitShift, bitsLeft);
-        const mask = (1 << bitsToTake) - 1;
-        const extractedBits = (byteVal >> bitShift) & mask;
-
-        rawValue |= (extractedBits << bitOffsetInResult);
-        bitOffsetInResult += bitsToTake;
-        bitsLeft -= bitsToTake;
-        currentByteIdx++;
-      }
-
-      // Sign extension if signed
-      if (sig.isSigned && (rawValue & (1 << (sig.bitLength - 1)))) {
-        rawValue = rawValue - (1 << sig.bitLength);
-      }
-    } else {
-      // Big-endian extraction (standard single-byte or 16-bit)
-      const startByte = Math.floor(sig.startBit / 8);
-      if (startByte < data.length) {
-        rawValue = data[startByte];
-      }
-    }
-
-    const physicalValue = (rawValue * sig.factor) + sig.offset;
-    result[sig.name] = Number(physicalValue.toFixed(2));
+    const raw = extractRawValue(data, sig);
+    if (raw === null) continue;
+    result[sig.name] = raw * sig.factor + sig.offset;
   }
-
   return result;
 }

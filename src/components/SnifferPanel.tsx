@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Eye, RefreshCw, Info, Waves, LayoutGrid, ArrowRightLeft, Sparkles } from 'lucide-react';
 import { ByteSnifferRecord, ByteActivityStatus } from '../types/can';
+import { classifyBit as classifyBitRate, BitClass } from '../services/sniffer';
 
 interface SnifferPanelProps {
   snifferMap: Map<number, ByteSnifferRecord>;
@@ -38,11 +39,15 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
     }
   };
 
-  const classifyBit = (flips: number) => {
-    if (flips === 0) return { label: 'STATIC', color: 'text-slate-600 bg-slate-900/60' };
-    if (flips <= 5) return { label: 'SWITCH', color: 'text-emerald-400 bg-emerald-950/40 border-emerald-700' };
-    if (flips <= 40) return { label: 'COUNTER', color: 'text-amber-400 bg-amber-950/40 border-amber-700' };
-    return { label: 'ANALOG', color: 'text-cyan-300 bg-cyan-950/40 border-cyan-700' };
+  const BIT_CLASS_STYLE: Record<BitClass, string> = {
+    STATIC: 'text-slate-600 bg-slate-900/60',
+    RARE: 'text-emerald-400 bg-emerald-950/40 border-emerald-700',
+    ACTIVE: 'text-amber-400 bg-amber-950/40 border-amber-700',
+    FAST: 'text-cyan-300 bg-cyan-950/40 border-cyan-700',
+  };
+  const classifyBit = (flips: number, frames: number) => {
+    const label = classifyBitRate(flips, frames);
+    return { label, color: BIT_CLASS_STYLE[label] };
   };
 
   return (
@@ -90,7 +95,7 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
             </span>
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-              <span className="text-slate-400">Fluctuating</span>
+              <span className="text-slate-400">Reversed direction</span>
             </span>
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-slate-600" />
@@ -292,18 +297,18 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
               <div className="grid grid-cols-2 gap-1.5 text-[10px]">
                 <div className="p-1 rounded bg-cyan-950/30 border border-cyan-800 text-cyan-300 flex items-center gap-1">
                   <Sparkles className="w-3 h-3" />
-                  <span>Analog (&gt;40 flips)</span>
+                  <span>Fast (≥45 % of frames)</span>
                 </div>
                 <div className="p-1 rounded bg-amber-950/30 border border-amber-800 text-amber-300 flex items-center gap-1">
                   <Sparkles className="w-3 h-3" />
-                  <span>Counter (5-40 flips)</span>
+                  <span>Active (5–45 %)</span>
                 </div>
                 <div className="p-1 rounded bg-emerald-950/30 border border-emerald-800 text-emerald-300 flex items-center gap-1">
                   <Sparkles className="w-3 h-3" />
-                  <span>Switch (1-5 flips)</span>
+                  <span>Rare (&lt;5 %)</span>
                 </div>
                 <div className="p-1 rounded bg-slate-900 border border-surface-border text-slate-500 flex items-center gap-1">
-                  <span>Static (0 flips)</span>
+                  <span>Static (never)</span>
                 </div>
               </div>
 
@@ -326,7 +331,7 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
                         const isSet = (byte & (1 << bitPos)) !== 0;
                         const globalBitIdx = bIdx * 8 + bitIdx;
                         const flips = selectedRecord.bitFlips ? selectedRecord.bitFlips[globalBitIdx] || 0 : 0;
-                        const classification = classifyBit(flips);
+                        const classification = classifyBit(flips, selectedRecord.framesCompared);
 
                         return (
                           <div
