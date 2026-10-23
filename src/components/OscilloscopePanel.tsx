@@ -1,5 +1,4 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { Crosshair, Camera, Download, Calculator, Plus, X } from 'lucide-react';
 import { CaptureStore } from '../state/captureStore';
 import { SeriesLike, lastValue, lowerBound, sampleAt, seriesOf } from '../state/ring';
 import { availableChannels, ChannelInfo } from '../state/channels';
@@ -14,19 +13,23 @@ import {
   CsvExportChannel,
 } from '../services/mathChannels';
 import { formatValue } from '../services/format';
+import { Segmented, TermButton, TermInput, Toolbar, cn } from '../ui/primitives';
+import { useHotkeys } from '../ui/keys';
+import { themeColor, useActiveTheme } from '../ui/theme';
+import { TD, TH, documentTheme, scopePalette, traceSwatch } from '../ui/panel-parts';
 
 interface OscilloscopePanelProps {
   store: CaptureStore;
 }
 
-const PALETTE = ['#06b6d4', '#10b981', '#f59e0b', '#a855f7', '#f43f5e', '#38bdf8', '#fb923c', '#84cc16'];
 const DEFAULT_KEYS = [signalKey('VehicleEngine', 'ENGINE_SPEED'), signalKey('VehicleSpeed', 'VEHICLE_SPEED'), signalKey('EkfLean', 'LEAN_ANGLE')];
 
 interface Trace {
   key: string;
   label: string;
   unit: string;
-  color: string;
+  /** Palette slot; the colour is resolved per theme when drawing. */
+  slot: number;
   series: SeriesLike;
   dashed: boolean;
 }
@@ -40,7 +43,7 @@ const SCOPE_FRAME_MS = 33;
  * more samples than pixel columns, each column draws the min-max span of its samples
  * (peak-preserving decimation), so cost follows the canvas width, not the data rate.
  */
-function drawTrace(ctx: CanvasRenderingContext2D, tr: Trace, t0: number, span: number, width: number, height: number, pad: number, dpr: number) {
+function drawTrace(ctx: CanvasRenderingContext2D, tr: Trace, color: string, t0: number, span: number, width: number, height: number, pad: number, dpr: number) {
   const s = tr.series;
   const i0 = Math.max(0, lowerBound(s, t0) - 1);
   const i1 = s.length;
@@ -62,8 +65,8 @@ function drawTrace(ctx: CanvasRenderingContext2D, tr: Trace, t0: number, span: n
   const yOf = (v: number) => height - pad - ((v - lo) / (hi - lo)) * (height - 2 * pad);
 
   ctx.setLineDash(tr.dashed ? [6 * dpr, 3 * dpr] : []);
-  ctx.strokeStyle = tr.color;
-  ctx.lineWidth = 1.6 * dpr;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4 * dpr;
   ctx.beginPath();
 
   const columns = Math.max(1, Math.floor(width));
@@ -106,7 +109,23 @@ function drawTrace(ctx: CanvasRenderingContext2D, tr: Trace, t0: number, span: n
   ctx.setLineDash([]);
 }
 
+const WINDOWS = [5, 10, 30, 60] as const;
+
+/** `VehicleEngine.ENGINE_SPEED` -> prefix faint, signal name in fg (DBC names are data). */
+const ChannelLabel: React.FC<{ label: string }> = ({ label }) => {
+  const dot = label.lastIndexOf('.');
+  const space = label.indexOf(' ');
+  const cut = dot >= 0 ? dot + 1 : space >= 0 ? space + 1 : 0;
+  return (
+    <span title={label}>
+      {cut > 0 && <span className="text-term-faint">{label.slice(0, cut)}</span>}
+      <span className="text-term-fg">{label.slice(cut)}</span>
+    </span>
+  );
+};
+
 export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) => {
+  const theme = useActiveTheme();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [timeWindowSec, setTimeWindowSec] = useState<number>(10);
   const [cursorA, setCursorA] = useState<number | null>(null);
@@ -126,25 +145,25 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
 
   const channels = availableChannels(store);
   const channelByKey = useMemo(() => new Map(channels.map((c) => [c.key, c])), [channels]);
-  const colorOf = (i: number) => PALETTE[i % PALETTE.length];
 
   /** Traces to draw; math channels are computed only over the visible window (+1 s). */
-  const buildTraces = (fromTime: number): Trace[] => [
-    ...enabled.map((key, i) => {
+  const buildTraces = (fromTime: number): Trace[] => {
+    const plain: Trace[] = enabled.map((key, i) => {
       const info = channelByKey.get(key);
-      return { key, label: info?.label ?? key, unit: info?.unit ?? '', color: colorOf(i), series: store.history.get(key) ?? EMPTY, dashed: false };
-    }),
-    ...mathChannels
+      return { key, label: info?.label ?? key, unit: info?.unit ?? '', slot: i, series: store.history.get(key) ?? EMPTY, dashed: false };
+    });
+    const math: Trace[] = mathChannels
       .filter((m) => m.enabled)
-      .map((m) => ({
+      .map((m, i) => ({
         key: m.id,
         label: `[math] ${m.label}`,
         unit: m.unit,
-        color: m.color,
+        slot: plain.length + i,
         series: seriesOf(computeMathChannel(m, store.history, fromTime)),
         dashed: true,
-      })),
-  ];
+      }));
+    return [...plain, ...math];
+  };
 
   const latestOf = (trs: Trace[]) => {
     let latest = 0;
@@ -159,13 +178,13 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
   const startTime = Math.max(0, latestTime - timeWindowSec);
   const cursorTime = (frac: number) => startTime + frac * timeWindowSec;
 
-  // The canvas draws on its own animation frames, only when data, settings or size changed.
+  // The canvas draws on its own animation frames, only when data, settings, size or theme changed.
   const drawConfig = useRef({ buildTraces, timeWindowSec, cursorA, cursorB, latestOf });
   drawConfig.current = { buildTraces, timeWindowSec, cursorA, cursorB, latestOf };
   const settingsVersion = useRef(0);
   useEffect(() => {
     settingsVersion.current++;
-  }, [enabled, mathChannels, timeWindowSec, cursorA, cursorB]);
+  }, [enabled, mathChannels, timeWindowSec, cursorA, cursorB, theme]);
 
   useEffect(() => {
     let raf = 0;
@@ -200,19 +219,21 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    ctx.fillStyle = '#090d16';
+    // Colours are read from the theme tokens on every draw, so a theme switch shows at once.
+    const palette = scopePalette(documentTheme());
+    ctx.fillStyle = themeColor('bg');
     ctx.fillRect(0, 0, width, height);
-    ctx.strokeStyle = '#1e293b';
+    ctx.strokeStyle = themeColor('rule');
     ctx.lineWidth = 1;
     for (let i = 1; i < 5; i++) {
-      const y = (height / 5) * i;
+      const y = Math.round((height / 5) * i) + 0.5;
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(width, y);
       ctx.stroke();
     }
     for (let i = 1; i < 10; i++) {
-      const x = (width / 10) * i;
+      const x = Math.round((width / 10) * i) + 0.5;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, height);
@@ -223,23 +244,24 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
     const trs = build(store.lastTime - span - 1);
     const t1 = latestFn(trs);
     const t0 = Math.max(0, t1 - span);
-    trs.forEach((tr) => drawTrace(ctx, tr, t0, span, width, height, pad, dpr));
+    trs.forEach((tr) => drawTrace(ctx, tr, palette[tr.slot % palette.length], t0, span, width, height, pad, dpr));
 
-    const drawCursor = (frac: number, color: string, label: string, row: number) => {
+    const drawCursor = (frac: number, color: string, dashed: boolean, label: string) => {
+      const x = Math.round(frac * width) + 0.5;
       ctx.strokeStyle = color;
-      ctx.setLineDash([4 * dpr, 4 * dpr]);
-      ctx.lineWidth = 1.5 * dpr;
+      ctx.setLineDash(dashed ? [4 * dpr, 4 * dpr] : []);
+      ctx.lineWidth = 1 * dpr;
       ctx.beginPath();
-      ctx.moveTo(frac * width, 0);
-      ctx.lineTo(frac * width, height);
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = color;
-      ctx.font = `${10 * dpr}px monospace`;
-      ctx.fillText(label, frac * width + 4 * dpr, 14 * dpr * row);
+      ctx.font = `${11 * dpr}px Iosevka, "DejaVu Sans Mono", monospace`;
+      ctx.fillText(label, x + 4 * dpr, height - 6 * dpr);
     };
-    if (cA !== null) drawCursor(cA, '#f59e0b', 'A', 1);
-    if (cB !== null) drawCursor(cB, '#06b6d4', 'B', 2);
+    if (cA !== null) drawCursor(cA, themeColor('amber'), false, 'A');
+    if (cB !== null) drawCursor(cB, themeColor('hi'), true, 'B');
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
@@ -255,6 +277,12 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
       setCursorB(frac);
       setNextCursor('A');
     }
+  };
+
+  const clearCursors = () => {
+    setCursorA(null);
+    setCursorB(null);
+    setNextCursor('A');
   };
 
   const handleExportCsv = () => {
@@ -282,11 +310,23 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
       timeWindowSec,
       platformName: 'Honda CL250',
       footer: `defs ${store.defs.ref} · ${traces.map((t) => t.label).join(', ')}`,
+    }, {
+      band: themeColor('raise', 0.92),
+      rule: themeColor('amber'),
+      title: themeColor('hi'),
+      text: themeColor('dim'),
+      faint: themeColor('dim'),
+      font: 'Iosevka, "DejaVu Sans Mono", monospace',
     });
     const a = document.createElement('a');
     a.href = url;
     a.download = `moto-analyzer-scope-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
     a.click();
+  };
+
+  const addPicked = () => {
+    const key = picker || channels[0]?.key;
+    if (key && !enabled.includes(key)) setEnabled((prev) => [...prev, key]);
   };
 
   const addMath = () => {
@@ -298,9 +338,20 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
     const label = MATH_OP_LABEL[draft.op].replace('A', la).replace('B', lb) + (scale !== 1 ? ` ×${scale}` : '');
     setMathChannels((prev) => [
       ...prev,
-      { id, label, op: draft.op, a: draft.a, b: draft.op === 'derivative' ? undefined : draft.b, scale, unit: draft.unit, color: '#ec4899', enabled: true },
+      // The colour comes from the theme palette by slot when drawn; the field stays empty.
+      { id, label, op: draft.op, a: draft.a, b: draft.op === 'derivative' ? undefined : draft.b, scale, unit: draft.unit, color: '', enabled: true },
     ]);
   };
+
+  // Panel keys; App owns t s o u h d space c x l / ? (GLOBAL_KEYS).
+  useHotkeys({
+    w: () => setTimeWindowSec((w) => WINDOWS[(WINDOWS.indexOf(w as (typeof WINDOWS)[number]) + 1) % WINDOWS.length]),
+    r: clearCursors,
+    a: addPicked,
+    m: () => setShowMath((v) => !v),
+    e: handleExportCsv,
+    p: handleSnapshotPng,
+  });
 
   const groups = useMemo(() => {
     const g = new Map<string, ChannelInfo[]>();
@@ -308,8 +359,8 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
     return [...g.entries()];
   }, [channels]);
 
-  const ChannelSelect: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => (
-    <select value={value} onChange={(e) => onChange(e.target.value)} className="bg-background border border-surface-border rounded px-2 py-1 text-xs text-slate-200 max-w-[260px]">
+  const ChannelSelect: React.FC<{ value: string; onChange: (v: string) => void; label: string }> = ({ value, onChange, label }) => (
+    <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="term-select max-w-[280px]">
       {groups.map(([g, list]) => (
         <optgroup key={g} label={g}>
           {list.map((c) => (
@@ -322,149 +373,159 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
     </select>
   );
 
-  return (
-    <div className="flex flex-col h-full bg-background font-mono text-xs select-none">
-      <div className="bg-surface/80 border-b border-surface-border px-4 py-2 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          {traces.map((t) => {
-            const last = lastValue(t.series);
-            const isMath = t.key.startsWith('math_');
-            return (
-              <span key={t.key} className="flex items-center gap-1.5 px-2 py-1 rounded border bg-surface-elevated text-slate-100" style={{ borderColor: t.color }}>
-                <span className="w-2 h-2 rounded-full" style={{ background: t.color }} />
-                <span>{t.label}</span>
-                <strong style={{ color: t.color }}>{formatValue(last)}</strong>
-                <span className="text-[10px] text-slate-400">{t.unit}</span>
-                <button
-                  onClick={() =>
-                    isMath ? setMathChannels((prev) => prev.filter((m) => m.id !== t.key)) : setEnabled((prev) => prev.filter((k) => k !== t.key))
-                  }
-                  className="text-slate-500 hover:text-rose-300"
-                  title="Remove"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </span>
-            );
-          })}
-          <span className="flex items-center gap-1">
-            <ChannelSelect value={picker || channels[0]?.key || ''} onChange={setPicker} />
-            <button
-              onClick={() => {
-                const key = picker || channels[0]?.key;
-                if (key && !enabled.includes(key)) setEnabled((prev) => [...prev, key]);
-              }}
-              className="p-1 rounded border border-surface-border bg-surface-elevated text-emerald-300 hover:border-emerald-500"
-              title="Add channel"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          </span>
-          <button
-            onClick={() => setShowMath((v) => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs border ${
-              showMath ? 'bg-pink-950/40 border-pink-500/60 text-pink-300' : 'bg-surface-elevated text-slate-400 border-surface-border hover:text-slate-200'
-            }`}
-          >
-            <Calculator className="w-3.5 h-3.5 text-pink-400" />
-            <span>Math</span>
-          </button>
-        </div>
+  const Swatch: React.FC<{ slot: number; dashed?: boolean }> = ({ slot, dashed }) => {
+    const sw = traceSwatch(theme, slot);
+    return (
+      <span aria-hidden="true" className={sw.className} style={sw.style}>
+        {dashed ? '┄' : '●'}
+      </span>
+    );
+  };
 
-        <div className="flex items-center gap-2">
-          <div className="flex items-center bg-background border border-surface-border rounded p-0.5">
-            {[5, 10, 30, 60].map((w) => (
-              <button key={w} onClick={() => setTimeWindowSec(w)} className={`px-2 py-0.5 rounded text-xs ${timeWindowSec === w ? 'bg-cyan-500/20 text-cyan-300 font-bold' : 'text-slate-400'}`}>
-                {w}s
+  const showReadout = cursorA !== null || cursorB !== null;
+
+  return (
+    <div className="flex h-full select-none flex-col bg-term-bg">
+      <Toolbar>
+        <Segmented
+          label="Time window"
+          hotkey="W"
+          options={WINDOWS.map((w) => ({ value: w, label: `${w}s` }))}
+          value={timeWindowSec}
+          onChange={setTimeWindowSec}
+        />
+        <span className="inline-flex items-center gap-1">
+          <TermButton hotkey="R" onClick={clearCursors} disabled={!showReadout} title="Remove both cursors">
+            cursors off
+          </TermButton>
+          <TermButton hotkey="M" toggled={showMath} onClick={() => setShowMath((v) => !v)} title="Host-side math channel">
+            math
+          </TermButton>
+          <TermButton hotkey="E" onClick={handleExportCsv} title="Export all plotted channels as CSV">
+            CSV
+          </TermButton>
+          <TermButton hotkey="P" onClick={handleSnapshotPng} title="Save the plot as PNG">
+            PNG
+          </TermButton>
+        </span>
+        <span className="ml-auto text-term-dim">
+          {startTime.toFixed(2)} – {latestTime.toFixed(2)} s
+        </span>
+      </Toolbar>
+
+      <div className="flex shrink-0 flex-wrap items-center gap-x-[22px] gap-y-1 border-b border-term-rule px-[14px] py-[6px]">
+        {traces.length === 0 && <span className="text-term-faint">no channel plotted</span>}
+        {traces.map((t) => {
+          const last = lastValue(t.series);
+          const isMath = t.key.startsWith('math_');
+          return (
+            <span key={t.key} className="inline-flex items-center gap-[1ch] whitespace-nowrap">
+              <Swatch slot={t.slot} dashed={t.dashed} />
+              <ChannelLabel label={t.label} />
+              <span className="text-term-hi">{last === undefined ? <span className="text-term-faint">–</span> : formatValue(last)}</span>
+              {t.unit && <span className="text-term-faint">{t.unit}</span>}
+              <button
+                type="button"
+                onClick={() =>
+                  isMath ? setMathChannels((prev) => prev.filter((m) => m.id !== t.key)) : setEnabled((prev) => prev.filter((k) => k !== t.key))
+                }
+                className="px-[2px] text-term-faint hover:text-term-hi"
+                title={`Remove ${t.label}`}
+                aria-label={`Remove ${t.label}`}
+              >
+                ×
               </button>
-            ))}
-          </div>
-          <button
-            onClick={() => {
-              setCursorA(null);
-              setCursorB(null);
-            }}
-            className="flex items-center gap-1 px-2 py-1 rounded bg-surface-elevated hover:bg-slate-700 text-slate-300 border border-surface-border text-xs"
-          >
-            <Crosshair className="w-3 h-3" />
-            <span>Cursors off</span>
-          </button>
-          <button onClick={handleExportCsv} className="flex items-center gap-1 px-2.5 py-1 rounded bg-surface-elevated text-emerald-300 border border-emerald-500/40 text-xs">
-            <Download className="w-3.5 h-3.5" />
-            <span>CSV</span>
-          </button>
-          <button onClick={handleSnapshotPng} className="flex items-center gap-1 px-2.5 py-1 rounded bg-surface-elevated text-cyan-300 border border-cyan-500/40 text-xs">
-            <Camera className="w-3.5 h-3.5" />
-            <span>PNG</span>
-          </button>
-        </div>
+            </span>
+          );
+        })}
+        <span className="inline-flex items-center gap-[6px]">
+          <ChannelSelect label="Channel to add" value={picker || channels[0]?.key || ''} onChange={setPicker} />
+          <TermButton hotkey="A" onClick={addPicked} title="Add the selected channel">
+            add
+          </TermButton>
+        </span>
       </div>
 
       {showMath && (
-        <div className="bg-surface-elevated/60 border-b border-surface-border px-4 py-2 flex flex-wrap items-center gap-2">
-          <span className="text-pink-400 font-semibold">Host math channel</span>
-          <select value={draft.op} onChange={(e) => setDraft({ ...draft, op: e.target.value as MathOp })} className="bg-background border border-surface-border rounded px-2 py-1 text-xs text-slate-200">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-term-rule px-[14px] py-[6px]">
+          <span className="font-semibold text-term-hi">math</span>
+          <select
+            aria-label="Operation"
+            value={draft.op}
+            onChange={(e) => setDraft({ ...draft, op: e.target.value as MathOp })}
+            className="term-select"
+          >
             {(Object.keys(MATH_OP_LABEL) as MathOp[]).map((op) => (
               <option key={op} value={op}>
                 {MATH_OP_LABEL[op]}
               </option>
             ))}
           </select>
-          <span className="text-slate-400">A</span>
-          <ChannelSelect value={draft.a} onChange={(a) => setDraft({ ...draft, a })} />
+          <span className="text-term-dim">A</span>
+          <ChannelSelect label="Input A" value={draft.a} onChange={(a) => setDraft({ ...draft, a })} />
           {draft.op !== 'derivative' && (
             <>
-              <span className="text-slate-400">B</span>
-              <ChannelSelect value={draft.b} onChange={(b) => setDraft({ ...draft, b })} />
+              <span className="text-term-dim">B</span>
+              <ChannelSelect label="Input B" value={draft.b} onChange={(b) => setDraft({ ...draft, b })} />
             </>
           )}
-          <span className="text-slate-400">× scale</span>
-          <input value={draft.scale} onChange={(e) => setDraft({ ...draft, scale: e.target.value })} className="bg-background border border-surface-border rounded px-2 py-1 w-16 text-slate-200" />
-          <span className="text-slate-400">unit</span>
-          <input value={draft.unit} onChange={(e) => setDraft({ ...draft, unit: e.target.value })} className="bg-background border border-surface-border rounded px-2 py-1 w-20 text-slate-200" />
-          <button onClick={addMath} className="px-2.5 py-1 rounded bg-pink-500/20 text-pink-200 border border-pink-500/50">
-            Add
-          </button>
-          <span className="text-[10px] text-slate-500">Analysis only — not a platform signal (derived signals live in moto-vehicle-defs).</span>
+          <span className="text-term-dim">× scale</span>
+          <TermInput aria-label="Scale" value={draft.scale} onChange={(e) => setDraft({ ...draft, scale: e.target.value })} className="w-[7ch] min-w-0" />
+          <span className="text-term-dim">unit</span>
+          <TermInput aria-label="Unit" value={draft.unit} onChange={(e) => setDraft({ ...draft, unit: e.target.value })} className="w-[9ch] min-w-0" />
+          <TermButton boxed onClick={addMath}>
+            add math channel
+          </TermButton>
+          <span className="italic text-term-dim">Analysis only, not a platform signal (derived signals live in moto-vehicle-defs).</span>
         </div>
       )}
 
-      <div className="flex-1 relative p-2 overflow-hidden flex flex-col">
-        <canvas ref={canvasRef} onClick={handleCanvasClick} className="w-full h-full rounded border border-surface-border cursor-crosshair" />
-        <div className="absolute bottom-3 left-4 text-[10px] text-slate-500">
-          {startTime.toFixed(2)} s — {latestTime.toFixed(2)} s · each trace auto-scaled to its visible range (min-max per pixel when dense) · click to place cursors
-        </div>
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <canvas ref={canvasRef} onClick={handleCanvasClick} className="h-full w-full cursor-crosshair" />
 
-        {(cursorA !== null || cursorB !== null) && (
-          <div className="absolute top-4 right-4 bg-surface/95 border border-surface-border rounded p-3 text-[11px] flex flex-col gap-1 shadow-lg min-w-[300px]">
-            <div className="font-semibold text-slate-200 border-b border-surface-border pb-1 grid grid-cols-4 gap-2">
-              <span>Cursor</span>
-              <span className="text-amber-400 text-right">A</span>
-              <span className="text-cyan-400 text-right">B</span>
-              <span className="text-emerald-400 text-right">B − A</span>
-            </div>
-            <div className="grid grid-cols-4 gap-2">
-              <span className="text-slate-400">t (s)</span>
-              <span className="text-right">{cursorA !== null ? cursorTime(cursorA).toFixed(3) : '–'}</span>
-              <span className="text-right">{cursorB !== null ? cursorTime(cursorB).toFixed(3) : '–'}</span>
-              <span className="text-right">{cursorA !== null && cursorB !== null ? `${((cursorB - cursorA) * timeWindowSec * 1000).toFixed(1)} ms` : '–'}</span>
-            </div>
-            {traces.map((t) => {
-              const va = cursorA !== null ? sampleAt(t.series, cursorTime(cursorA)) : undefined;
-              const vb = cursorB !== null ? sampleAt(t.series, cursorTime(cursorB)) : undefined;
-              return (
-                <div key={t.key} className="grid grid-cols-4 gap-2">
-                  <span className="truncate" style={{ color: t.color }} title={t.label}>
-                    {t.label}
-                  </span>
-                  <span className="text-right">{formatValue(va)}</span>
-                  <span className="text-right">{formatValue(vb)}</span>
-                  <span className="text-right">{va !== undefined && vb !== undefined ? formatValue(vb - va) : '–'}</span>
-                </div>
-              );
-            })}
-          </div>
+        {showReadout && (
+          <table className="absolute right-[14px] top-[10px] border border-term-ruleHi bg-term-bg">
+            <thead>
+              <tr>
+                <th className={TH}>cursor</th>
+                <th className={cn(TH, 'text-right text-term-amber')}>A</th>
+                <th className={cn(TH, 'text-right text-term-hi')}>B</th>
+                <th className={cn(TH, 'text-right')}>B − A</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className={cn(TD, 'text-term-dim')}>t s</td>
+                <td className={cn(TD, 'text-right')}>{cursorA !== null ? cursorTime(cursorA).toFixed(3) : <span className="text-term-faint">–</span>}</td>
+                <td className={cn(TD, 'text-right')}>{cursorB !== null ? cursorTime(cursorB).toFixed(3) : <span className="text-term-faint">–</span>}</td>
+                <td className={cn(TD, 'text-right text-term-hi')}>
+                  {cursorA !== null && cursorB !== null ? `${((cursorB - cursorA) * timeWindowSec * 1000).toFixed(1)} ms` : <span className="text-term-faint">–</span>}
+                </td>
+              </tr>
+              {traces.map((t) => {
+                const va = cursorA !== null ? sampleAt(t.series, cursorTime(cursorA)) : undefined;
+                const vb = cursorB !== null ? sampleAt(t.series, cursorTime(cursorB)) : undefined;
+                const cell = (v: number | undefined) => (v === undefined ? <span className="text-term-faint">–</span> : formatValue(v));
+                return (
+                  <tr key={t.key}>
+                    <td className={cn(TD, 'max-w-[260px] overflow-hidden text-ellipsis')} title={t.label}>
+                      <Swatch slot={t.slot} dashed={t.dashed} /> <ChannelLabel label={t.label} />
+                    </td>
+                    <td className={cn(TD, 'text-right')}>{cell(va)}</td>
+                    <td className={cn(TD, 'text-right')}>{cell(vb)}</td>
+                    <td className={cn(TD, 'text-right text-term-hi')}>{va !== undefined && vb !== undefined ? formatValue(vb - va) : <span className="text-term-faint">–</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
+      </div>
+      <div className="flex h-[24px] shrink-0 items-center gap-[22px] whitespace-nowrap border-t border-term-rule px-[14px] text-term-faint">
+        <span>each trace auto-scaled to its visible range, min-max per pixel when dense</span>
+        <span>
+          click places cursor <span className={nextCursor === 'A' ? 'text-term-amber' : 'text-term-hi'}>{nextCursor}</span>
+        </span>
       </div>
     </div>
   );

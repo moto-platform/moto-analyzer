@@ -1,74 +1,83 @@
 import React from 'react';
-import { HeartPulse, Info, ShieldCheck, Activity, CircleDot } from 'lucide-react';
 import { CaptureStore } from '../state/captureStore';
 import { evaluateWindow, WindowState } from '../services/windows';
 import { isE2EValid } from '../services/e2e';
 import { formatSignal, formatValue } from '../services/format';
 import { frameKey } from '../services/capture';
+import { FaultCell, Na, Note, Pane, TextMeter, Toolbar, cn } from '../ui/primitives';
+import { GutterMark, TD, TH } from '../ui/panel-parts';
 
 interface HealthPanelProps {
   store: CaptureStore;
 }
 
-const holdTone = (h: boolean | null) => (h === null ? 'text-slate-500' : h ? 'text-emerald-300' : 'text-slate-400');
-const holdText = (h: boolean | null) => (h === null ? 'n/a' : h ? 'holds' : 'no');
+/** Condition result: holds dim, failing `no` amber, unobservable `n/a` faint. */
+const HoldText: React.FC<{ h: boolean | null }> = ({ h }) =>
+  h === null ? <span className="text-term-faint">n/a</span> : h ? <span className="text-term-dim">holds</span> : <span className="text-term-amber">no</span>;
 
-const WindowCard: React.FC<{ s: WindowState }> = ({ s }) => {
+const ValueText: React.FC<{ v: number | string | null | undefined }> = ({ v }) => (v === undefined || v === null ? <Na /> : <>{formatValue(v)}</>);
+
+/** Verdict on the pane title row, per the token state rules. */
+function verdict(s: WindowState): React.ReactNode {
   const w = s.def;
   const isCondition = w.opensOn === 'condition';
   const eventOnly = w.conditions.length === 0 && w.stable.length === 0;
-  const badge = eventOnly
-    ? { text: `EVENT: ${w.opensOn.toUpperCase()}`, tone: 'bg-slate-900 text-slate-400 border-slate-700' }
-    : isCondition && s.qualified
-    ? { text: 'ENTRY MET', tone: 'bg-emerald-950/50 text-emerald-300 border-emerald-700' }
-    : s.conditionsHold === true
-    ? { text: isCondition ? `HOLDING ${s.heldForSec.toFixed(1)} s` : `HOLDS · NEEDS ${w.opensOn.toUpperCase()}`, tone: 'bg-amber-950/40 text-amber-300 border-amber-700' }
-    : s.conditionsHold === null
-    ? { text: 'NOT OBSERVABLE', tone: 'bg-slate-900 text-slate-400 border-slate-700' }
-    : { text: 'NOT MET', tone: 'bg-slate-900 text-slate-400 border-slate-700' };
+  if (eventOnly) return <span className="text-term-faint">event: {w.opensOn}</span>;
+  if (isCondition && s.qualified) return <span className="text-term-hi">entry met</span>;
+  if (s.conditionsHold === true)
+    return <span className="text-term-amber">{isCondition ? `holding ${s.heldForSec.toFixed(1)} s` : `holds, needs ${w.opensOn}`}</span>;
+  if (s.conditionsHold === null) return <span className="text-term-faint">– not observable</span>;
+  return <span className="text-term-amber">! not met</span>;
+}
 
+/** One D-079 window, styled like the mockup's W3_WARM_IDLE pane. */
+const WindowPane: React.FC<{ s: WindowState }> = ({ s }) => {
+  const w = s.def;
   return (
-    <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-2.5">
-      <div className="flex items-start justify-between gap-2 border-b border-surface-border pb-2">
-        <div>
-          <div className="font-bold text-slate-100">{w.key}</div>
-          <div className="text-[10px] text-slate-400">
-            {w.record}
-            {w.recordDid !== undefined && ` · 0x${w.recordDid.toString(16).toUpperCase()}`}
-          </div>
-        </div>
-        <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold whitespace-nowrap ${badge.tone}`}>{badge.text}</span>
+    <Pane title={w.key} aside={verdict(s)} className="border-r">
+      <div className="text-term-faint">
+        {w.record}
+        {w.recordDid !== undefined && ` 0x${w.recordDid.toString(16).toUpperCase()}`}, opens on {w.opensOn}, {w.minDurationMs / 1000}–{w.maxDurationMs / 1000} s
       </div>
-      <p className="text-[11px] text-slate-300 leading-relaxed">{w.description}</p>
-      <div className="text-[10px] text-slate-400">
-        opens on <span className="text-cyan-300">{w.opensOn}</span> · {w.minDurationMs / 1000}–{w.maxDurationMs / 1000} s
-      </div>
-
-      <div className="flex flex-col gap-1 text-[11px]">
-        {s.conditions.length === 0 && <span className="text-slate-500">No condition: opened by the {w.opensOn} event alone.</span>}
+      <p className="mb-[6px] mt-[2px] text-term-dim">{w.description}</p>
+      <div className="mt-[6px] grid grid-cols-[1fr_auto_5ch] gap-x-3">
+        {s.conditions.length === 0 && s.stable.length === 0 && (
+          <span className="col-span-3 text-term-faint">No condition: opened by the {w.opensOn} event alone.</span>
+        )}
         {s.conditions.map((c, i) => (
-          <div key={i} className="grid grid-cols-[1fr_auto_auto] gap-2 items-baseline">
-            <span className="text-slate-300 truncate" title={c.input.note}>
+          <React.Fragment key={i}>
+            <span className="truncate" title={c.input.note ? `${c.text} (${c.input.note})` : c.text}>
               {c.text}
-              {c.input.note && <span className="text-[9px] text-slate-500"> ({c.input.note})</span>}
+              {c.input.note && <span className="text-term-faint"> ({c.input.note})</span>}
             </span>
-            <span className="text-cyan-200">{formatValue(c.value)}</span>
-            <span className={`${holdTone(c.holds)} w-12 text-right`}>{holdText(c.holds)}</span>
-          </div>
+            <span className="text-right">
+              <ValueText v={c.value} />
+            </span>
+            <span className="text-right">
+              <HoldText h={c.holds} />
+            </span>
+          </React.Fragment>
         ))}
         {s.stable.map((st, i) => (
-          <div key={`s${i}`} className="grid grid-cols-[1fr_auto_auto] gap-2 items-baseline">
-            <span className="text-slate-300 truncate">
+          <React.Fragment key={`s${i}`}>
+            <span className="truncate">
               {st.input.label} spread ≤ {st.maxSpread} over {w.minDurationMs / 1000} s
             </span>
-            <span className="text-cyan-200">{formatValue(st.spread)}</span>
-            <span className={`${holdTone(st.holds)} w-12 text-right`}>{holdText(st.holds)}</span>
-          </div>
+            <span className="text-right">
+              <ValueText v={st.spread} />
+            </span>
+            <span className="text-right">
+              <HoldText h={st.holds} />
+            </span>
+          </React.Fragment>
         ))}
       </div>
-    </div>
+    </Pane>
   );
 };
+
+/** Error count: red when above zero, faint otherwise. */
+const Count: React.FC<{ n: number | undefined }> = ({ n }) => <span className={(n ?? 0) > 0 ? 'text-term-red' : 'text-term-faint'}>{n ?? 0}</span>;
 
 export const HealthPanel: React.FC<HealthPanelProps> = ({ store }) => {
   const defs = store.defs;
@@ -79,103 +88,125 @@ export const HealthPanel: React.FC<HealthPanelProps> = ({ store }) => {
     .catalog('platform')
     .filter((m) => m.signals.some((s) => s.name === 'NODE_MODE'))
     .map((m) => ({ msg: m, frame: store.framesByKey.get(frameKey('platform', m.id)) }));
+  const buses = [...store.busLoad.entries()].sort(([a], [b]) => a.localeCompare(b));
 
   return (
-    <div className="flex flex-col h-full bg-background font-mono text-xs select-none overflow-auto p-4 gap-4">
-      <div className="bg-surface/80 border border-surface-border rounded-lg p-4 flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-          <HeartPulse className="w-5 h-5 text-rose-400" />
-          <span className="font-bold text-base text-slate-100">D-079 health windows W1–W5</span>
-          <span className="text-[10px] bg-amber-950/40 text-amber-300 px-2 py-0.5 rounded border border-amber-800">provisional values</span>
-        </div>
-        <p className="text-slate-400 text-[11px] leading-relaxed flex gap-2">
-          <Info className="w-4 h-4 shrink-0 text-cyan-400" />
-          Window records are computed on rt-core and read as ride-summary DIDs. This page shows each window's entry condition from
-          derived/cl250_derived.yaml against the inputs the analyzer can observe; it does not compute the records.
+    <div className="flex h-full select-none flex-col bg-term-bg">
+      <Toolbar>
+        <span className="font-semibold text-term-hi">D-079 health windows W1–W5</span>
+        <span className="text-term-amber">! provisional values</span>
+        <span className="ml-auto text-term-dim">derived/cl250_derived.yaml · defs {defs.ref}</span>
+      </Toolbar>
+
+      <div className="min-h-0 flex-1 overflow-auto">
+        <p className="border-b border-term-rule px-[14px] py-[6px] italic text-term-dim">
+          Window records are computed on rt-core and read as ride-summary DIDs. This view checks each window's entry condition against the inputs the
+          analyzer can observe; it does not compute the records.
         </p>
-      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {windows.map((s) => (
-          <WindowCard key={s.def.key} s={s} />
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-2">
-          <div className="flex items-center gap-2 font-semibold text-slate-200 border-b border-surface-border pb-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" /> E2E supervisor (platform bus)
+        {/* Columns separated by rules; the wrapper hides the last column's right rule. */}
+        <div className="overflow-hidden">
+          <div className="-mr-px grid grid-cols-[repeat(auto-fill,minmax(360px,1fr))]">
+            {windows.map((s) => (
+              <WindowPane key={s.def.key} s={s} />
+            ))}
           </div>
-          {e2e.length === 0 ? (
-            <span className="text-slate-500">No E2E-protected message seen.</span>
-          ) : (
-            <table className="w-full text-left text-[11px]">
-              <thead className="text-slate-400 text-[10px]">
-                <tr>
-                  <th className="py-1">MESSAGE</th>
-                  <th className="py-1">STATUS</th>
-                  <th className="py-1 text-right">OK</th>
-                  <th className="py-1 text-right">CRC</th>
-                  <th className="py-1 text-right">SEQ</th>
-                  <th className="py-1 text-right">REP</th>
-                  <th className="py-1 text-right">TIMEOUT</th>
-                </tr>
-              </thead>
-              <tbody>
-                {e2e.map((m) => (
-                  <tr key={m.id} className="border-t border-surface-border/40">
-                    <td className="py-1 text-slate-200">
-                      0x{m.id.toString(16).toUpperCase().padStart(3, '0')} {m.name}
-                    </td>
-                    <td className={`py-1 ${isE2EValid(m.status) ? 'text-emerald-300' : 'text-rose-300'}`}>{m.status}</td>
-                    <td className="py-1 text-right text-slate-300">{m.counts.OK ?? 0}</td>
-                    <td className="py-1 text-right text-rose-300">{m.counts.WRONG_CRC ?? 0}</td>
-                    <td className="py-1 text-right text-rose-300">{m.counts.WRONG_SEQUENCE ?? 0}</td>
-                    <td className="py-1 text-right text-amber-300">{m.counts.REPEATED ?? 0}</td>
-                    <td className="py-1 text-right text-amber-300">{m.counts.NO_NEW_DATA ?? 0}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          <span className="text-[10px] text-slate-500">CRC-8/SAE-J1850 over DataID + payload, counter step 1, timeout 3 × cycle time (docs/e2e-profile.md).</span>
         </div>
 
-        <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-2">
-          <div className="flex items-center gap-2 font-semibold text-slate-200 border-b border-surface-border pb-2">
-            <Activity className="w-4 h-4 text-cyan-400" /> Node heartbeats and bus load
-          </div>
-          {heartbeats.map(({ msg, frame }) => {
-            const sig = (n: string) => msg.signals.find((s) => s.name === n);
-            const v = frame?.decodedSignals ?? {};
-            const ageMs = frame ? (now - frame.timestamp) * 1000 : null;
-            const late = ageMs !== null && msg.cycleTimeMs ? ageMs > 3 * msg.cycleTimeMs : true;
-            return (
-              <div key={msg.id} className="grid grid-cols-[150px_1fr_auto] gap-2 text-[11px] items-center">
-                <span className="text-slate-200 flex items-center gap-1.5">
-                  <CircleDot className={`w-3 h-3 ${!frame || late ? 'text-rose-400' : 'text-emerald-400'}`} />
-                  {msg.name.replace('Heartbeat', '')}
-                </span>
-                <span className="text-slate-400">
-                  {frame ? (
-                    <>
-                      mode <span className="text-cyan-200">{formatSignal(sig('NODE_MODE'), v.NODE_MODE)}</span> · errors{' '}
-                      <span className="text-cyan-200">{formatValue(v.ERROR_COUNT)}</span> · uptime <span className="text-cyan-200">{formatValue(v.UPTIME)} s</span>
-                    </>
-                  ) : (
-                    'not seen'
-                  )}
-                </span>
-                <span className={`text-right ${late ? 'text-rose-300' : 'text-slate-500'}`}>{ageMs !== null ? `${ageMs.toFixed(0)} ms` : ''}</span>
+        <div className="overflow-hidden">
+          <div className="-mr-px grid grid-cols-[repeat(auto-fit,minmax(520px,1fr))]">
+            <Pane title="E2E supervisor" aside="platform bus" className="border-r">
+              {e2e.length === 0 ? (
+                <span className="text-term-faint">No E2E-protected message seen.</span>
+              ) : (
+                <table className="-mx-2 w-[calc(100%+16px)] border-collapse">
+                  <thead>
+                    <tr>
+                      <th className={TH}>message</th>
+                      <th className={TH}>status</th>
+                      <th className={cn(TH, 'text-right')}>ok</th>
+                      <th className={cn(TH, 'text-right')}>crc</th>
+                      <th className={cn(TH, 'text-right')}>seq</th>
+                      <th className={cn(TH, 'text-right')}>rep</th>
+                      <th className={cn(TH, 'text-right')}>timeout</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {e2e.map((m) => {
+                      const ok = isE2EValid(m.status);
+                      return (
+                        <tr key={m.id}>
+                          <td className={cn(TD, ok ? '' : 'text-term-red')}>
+                            <span className={ok ? 'text-term-hi' : ''}>0x{m.id.toString(16).toUpperCase().padStart(3, '0')}</span> {m.name}
+                          </td>
+                          <td className={TD}>{ok ? <span className="text-term-dim">{m.status.toLowerCase()}</span> : <FaultCell>{m.status}</FaultCell>}</td>
+                          <td className={cn(TD, 'text-right')}>{m.counts.OK ?? 0}</td>
+                          <td className={cn(TD, 'text-right')}>
+                            <Count n={m.counts.WRONG_CRC} />
+                          </td>
+                          <td className={cn(TD, 'text-right')}>
+                            <Count n={m.counts.WRONG_SEQUENCE} />
+                          </td>
+                          <td className={cn(TD, 'text-right')}>
+                            <Count n={m.counts.REPEATED} />
+                          </td>
+                          <td className={cn(TD, 'text-right')}>
+                            <Count n={m.counts.NO_NEW_DATA} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+              <Note className="text-term-faint">CRC-8/SAE-J1850 over DataID + payload, counter step 1, timeout 3 × cycle time (docs/e2e-profile.md).</Note>
+            </Pane>
+
+            <Pane title="Node heartbeats and bus load" className="border-r">
+              <table className="-mx-2 w-[calc(100%+16px)] border-collapse">
+                <thead>
+                  <tr>
+                    <th className={cn(TH, 'w-[22px] pr-0')} aria-label="mark" />
+                    <th className={TH}>node</th>
+                    <th className={TH}>mode</th>
+                    <th className={cn(TH, 'text-right')}>errors</th>
+                    <th className={cn(TH, 'text-right')}>uptime s</th>
+                    <th className={cn(TH, 'text-right')}>age ms</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {heartbeats.map(({ msg, frame }) => {
+                    const sig = (n: string) => msg.signals.find((s) => s.name === n);
+                    const v = frame?.decodedSignals ?? {};
+                    const ageMs = frame ? (now - frame.timestamp) * 1000 : null;
+                    const late = ageMs !== null && msg.cycleTimeMs ? ageMs > 3 * msg.cycleTimeMs : true;
+                    return (
+                      <tr key={msg.id}>
+                        <td className={cn(TD, 'pr-0')}>
+                          <GutterMark fault={late} />
+                        </td>
+                        <td className={cn(TD, late && 'text-term-red')}>{msg.name.replace('Heartbeat', '')}</td>
+                        <td className={TD}>{frame ? formatSignal(sig('NODE_MODE'), v.NODE_MODE) : <span className="text-term-red">not seen</span>}</td>
+                        <td className={cn(TD, 'text-right')}>{frame ? formatValue(v.ERROR_COUNT) : <Na />}</td>
+                        <td className={cn(TD, 'text-right')}>{frame ? formatValue(v.UPTIME) : <Na />}</td>
+                        <td className={cn(TD, 'text-right', late ? 'text-term-red' : 'text-term-faint')}>{ageMs !== null ? ageMs.toFixed(0) : <Na />}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div className="mt-3 flex flex-col">
+                {buses.map(([bus, l]) => (
+                  <span key={bus} className="flex items-center gap-[2ch] whitespace-nowrap">
+                    <TextMeter label={bus.padEnd(8, ' ')} pct={l.loadPct} />
+                    <span className="text-term-dim">
+                      peak <span className="text-term-fg">{l.peakPct.toFixed(1)}%</span> · <span className="text-term-fg">{l.framesPerSec.toFixed(0)}</span> fr/s
+                    </span>
+                  </span>
+                ))}
               </div>
-            );
-          })}
-          <div className="border-t border-surface-border pt-2 flex flex-wrap gap-4 text-[11px]">
-            {[...store.busLoad.entries()].map(([bus, l]) => (
-              <span key={bus} className="text-slate-400">
-                {bus}: <span className="text-cyan-200">{l.loadPct.toFixed(1)} %</span> (peak {l.peakPct.toFixed(1)} %, {l.framesPerSec.toFixed(0)} fr/s)
-              </span>
-            ))}
+              <Note className="text-term-faint">Late = no heartbeat for 3 × the cycle time.</Note>
+            </Pane>
           </div>
         </div>
       </div>

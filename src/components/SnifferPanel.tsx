@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
-import { Eye, RefreshCw, Info, Waves, LayoutGrid, ArrowRightLeft, Sparkles } from 'lucide-react';
-import { ByteActivityStatus } from '../types/can';
+import React, { useEffect, useRef, useState } from 'react';
+import { ByteActivityStatus, ByteSnifferRecord } from '../types/can';
 import { CaptureStore } from '../state/captureStore';
 import { frameKey } from '../services/capture';
-import { classifyBit as classifyBitRate, BitClass } from '../services/sniffer';
+import { classifyBit, BitClass } from '../services/sniffer';
+import { ByteCell, KeyValues, Na, Note, Pane, Segmented, TermButton, Toolbar, cn } from '../ui/primitives';
+import { useHotkeys } from '../ui/keys';
+import { GutterMark, PanelFooter } from '../ui/trace-parts';
 
 interface SnifferPanelProps {
   store: CaptureStore;
@@ -11,357 +13,363 @@ interface SnifferPanelProps {
 
 type SnifferViewMode = 'heatmap' | 'flow';
 
+const hex2 = (b: number) => b.toString(16).toUpperCase().padStart(2, '0');
+
+/** Text tone and trailing glyph of a heatmap byte, per activity. */
+const BYTE_LOOK: Record<ByteActivityStatus, { tone: string; glyph: string; label: string }> = {
+  inc: { tone: 'text-term-hi', glyph: '↑', label: 'increasing' },
+  dec: { tone: 'text-term-hi', glyph: '↓', label: 'decreasing' },
+  toggling: { tone: 'text-term-amber', glyph: '~', label: 'reversed direction' },
+  static: { tone: 'text-term-faint', glyph: ' ', label: 'static' },
+};
+
+/** Bit classes by colour only: static faint, rare dim, active fg, fast hi. */
+const BIT_TONE: Record<BitClass, string> = {
+  STATIC: 'text-term-faint',
+  RARE: 'text-term-dim',
+  ACTIVE: 'text-term-fg',
+  FAST: 'text-term-hi',
+};
+
+/** One heatmap byte: value plus a one-character activity glyph; notched bytes are struck through. */
+const HeatByte: React.FC<{ value: number; status: ByteActivityStatus; notched: boolean; changes: number; idx: number; onToggle: () => void }> = ({
+  value,
+  status,
+  notched,
+  changes,
+  idx,
+  onToggle,
+}) => {
+  const look = BYTE_LOOK[status];
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      aria-pressed={notched}
+      title={`Byte ${idx}: 0x${hex2(value)} (${value}), ${look.label}\nChanges: ${changes}\nClick to ${notched ? 'un-notch' : 'notch (mute)'} this byte`}
+      className={cn('inline-block w-[3.4ch] text-left hover:bg-term-row', notched ? 'text-term-faint line-through' : look.tone)}
+    >
+      {hex2(value)}
+      <span className={cn(notched ? 'text-term-faint' : status === 'toggling' ? 'text-term-amber' : 'text-term-dim')}>{notched ? ' ' : look.glyph}</span>
+    </button>
+  );
+};
+
 export const SnifferPanel: React.FC<SnifferPanelProps> = ({ store }) => {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<SnifferViewMode>('heatmap');
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   const snifferMap = store.sniffer;
   const keyOf = (rec: { id: number; bus: string }) => frameKey(rec.bus, rec.id);
   const records = Array.from(snifferMap.values()).sort((a, b) => a.bus.localeCompare(b.bus) || a.id - b.id);
   const selectedRecord = (selectedKey !== null ? snifferMap.get(selectedKey) : undefined) ?? records[0];
+  const selKey = selectedRecord ? keyOf(selectedRecord) : null;
   const onToggleNotch = (key: string, idx: number) => store.toggleNotch(key, idx);
   const onInvertNotch = (key: string) => store.invertNotch(key);
   const onClearNotches = () => store.clearNotches();
 
-  const getStatusColor = (status: ByteActivityStatus, isNotched: boolean) => {
-    if (isNotched) return 'bg-slate-800 text-slate-500 opacity-40 line-through';
-    switch (status) {
-      case 'inc':
-        return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50';
-      case 'dec':
-        return 'bg-rose-500/20 text-rose-400 border-rose-500/50';
-      case 'toggling':
-        return 'bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse';
-      case 'static':
-      default:
-        return 'bg-slate-900/60 text-slate-400 border-surface-border';
-    }
+  const moveSelection = (delta: number) => {
+    if (records.length === 0) return;
+    const idx = selKey === null ? -1 : records.findIndex((r) => keyOf(r) === selKey);
+    const next = idx < 0 ? 0 : Math.min(records.length - 1, Math.max(0, idx + delta));
+    setSelectedKey(keyOf(records[next]));
   };
 
-  const BIT_CLASS_STYLE: Record<BitClass, string> = {
-    STATIC: 'text-slate-600 bg-slate-900/60',
-    RARE: 'text-emerald-400 bg-emerald-950/40 border-emerald-700',
-    ACTIVE: 'text-amber-400 bg-amber-950/40 border-amber-700',
-    FAST: 'text-cyan-300 bg-cyan-950/40 border-cyan-700',
-  };
-  const classifyBit = (flips: number, frames: number) => {
-    const label = classifyBitRate(flips, frames);
-    return { label, color: BIT_CLASS_STYLE[label] };
-  };
+  useEffect(() => {
+    if (selectedKey === null || viewMode !== 'heatmap') return;
+    listRef.current?.querySelector<HTMLElement>(`[data-row-key="${selectedKey}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [selectedKey, viewMode]);
+
+  useHotkeys({
+    j: () => moveSelection(1),
+    k: () => moveSelection(-1),
+    ArrowDown: () => moveSelection(1),
+    ArrowUp: () => moveSelection(-1),
+    v: () => setViewMode((m) => (m === 'heatmap' ? 'flow' : 'heatmap')),
+    i: () => {
+      if (selKey) onInvertNotch(selKey);
+    },
+    r: onClearNotches,
+  });
 
   return (
-    <div className="flex flex-col h-full bg-background font-mono text-xs select-none">
-      {/* Sniffer Top Bar */}
-      <div className="bg-surface/80 border-b border-surface-border px-4 py-2 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-200">SavvyCAN Sniffer & Flow View</span>
-            {/* View Mode Toggle */}
-            <div className="flex items-center bg-background border border-surface-border rounded p-0.5 ml-2">
-              <button
-                onClick={() => setViewMode('heatmap')}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors ${
-                  viewMode === 'heatmap'
-                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <LayoutGrid className="w-3.5 h-3.5" />
-                <span>Heatmap</span>
-              </button>
-              <button
-                onClick={() => setViewMode('flow')}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors ${
-                  viewMode === 'flow'
-                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Waves className="w-3.5 h-3.5" />
-                <span>Flow Waterfall</span>
-              </button>
-            </div>
-          </div>
+    <div className="flex h-full select-none flex-col bg-term-bg">
+      <Toolbar>
+        <Segmented<SnifferViewMode>
+          label="Sniffer view"
+          value={viewMode}
+          onChange={setViewMode}
+          hotkey="V"
+          options={[
+            { value: 'heatmap', label: 'heatmap', title: 'Byte activity of every id' },
+            { value: 'flow', label: 'flow', title: 'Last frames of the selected id' },
+          ]}
+        />
+        <span className="hidden gap-[14px] text-term-dim xl:inline-flex">
+          <span>
+            <span className="text-term-hi">3C</span>
+            <span>↑</span> inc
+          </span>
+          <span>
+            <span className="text-term-hi">3C</span>
+            <span>↓</span> dec
+          </span>
+          <span>
+            <span className="text-term-amber">3C~</span> reversed
+          </span>
+          <span>
+            <span className="text-term-faint">3C</span> static
+          </span>
+          <span>
+            <span className="text-term-faint line-through">3C</span> notched
+          </span>
+        </span>
+        <span className="ml-auto flex items-center gap-[10px]">
+          <TermButton hotkey="I" onClick={() => selKey && onInvertNotch(selKey)} disabled={!selKey} title="Invert the notched bytes of the selected id">
+            Invert notch
+          </TermButton>
+          <TermButton hotkey="R" onClick={onClearNotches} title="Remove every notch">
+            Reset notches
+          </TermButton>
+        </span>
+      </Toolbar>
 
-          <div className="flex items-center gap-3 text-[11px] hidden lg:flex">
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-              <span className="text-slate-400">Increasing</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-400" />
-              <span className="text-slate-400">Decreasing</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-              <span className="text-slate-400">Reversed direction</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-slate-600" />
-              <span className="text-slate-400">Static</span>
-            </span>
-          </div>
-        </div>
-
-        {/* Notch & Action Controls */}
-        <div className="flex items-center gap-2">
-          {selectedRecord && (
-            <button
-              onClick={() => onInvertNotch(keyOf(selectedRecord))}
-              className="flex items-center gap-1 px-2.5 py-1 rounded bg-surface-elevated hover:bg-slate-700 text-cyan-300 border border-surface-border text-xs transition-colors"
-              title="Invert notched bytes for selected ID"
-            >
-              <ArrowRightLeft className="w-3 h-3" />
-              <span>Invert Notch</span>
-            </button>
-          )}
-
-          <button
-            onClick={onClearNotches}
-            className="flex items-center gap-1 px-2.5 py-1 rounded bg-surface-elevated hover:bg-slate-700 text-slate-300 border border-surface-border transition-colors text-xs"
-            title="Reset all Notch filters"
-          >
-            <RefreshCw className="w-3 h-3" />
-            <span>Reset Notches</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Main Split Layout: Table/Flow on Left, Bit Inspector on Right */}
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-        {/* Left Side: Heatmap Matrix OR Flow View Waterfall */}
-        <div className="flex-1 overflow-auto border-r border-surface-border">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className="min-w-0 flex-1 overflow-auto" ref={listRef}>
           {viewMode === 'heatmap' ? (
-            /* Heatmap Matrix Table */
-            <table className="w-full text-left border-collapse">
-              <thead className="bg-surface sticky top-0 border-b border-surface-border text-slate-400 text-[11px] font-semibold">
+            <table className="w-full table-fixed border-separate border-spacing-0 text-left">
+              <colgroup>
+                <col style={{ width: 20 }} />
+                <col style={{ width: '13ch' }} />
+                <col style={{ width: '24ch' }} />
+                {Array.from({ length: 8 }, (_, i) => (
+                  <col key={i} style={{ width: '4.4ch' }} />
+                ))}
+                <col />
+              </colgroup>
+              <thead className="sticky top-0 z-10 bg-term-bg">
                 <tr>
-                  <th className="py-2 px-3 w-20">ID</th>
-                  <th className="py-2 px-3 w-40">NAME</th>
-                  <th className="py-2 px-3 text-center" colSpan={8}>
-                    DATA BYTES (B0 - B7) — CLICK BYTE TO NOTCH / MUTE
-                  </th>
-                  <th className="py-2 px-3 w-24 text-right">ACTIONS</th>
+                  <th className={TH} aria-label="Marker" />
+                  <th className={TH}>id</th>
+                  <th className={TH}>name</th>
+                  {Array.from({ length: 8 }, (_, i) => (
+                    <th key={i} className={TH}>
+                      b{i}
+                    </th>
+                  ))}
+                  <th className={cn(TH, 'text-right')}>changes</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-surface-border/50 text-[11px]">
+              <tbody>
                 {records.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="py-12 text-center text-slate-500">
-                      No CAN activity to sniff. Start telemetry stream to populate byte heatmap.
+                    <td colSpan={12} className="px-[14px] py-6 italic text-term-dim">
+                      No CAN activity yet. Run a source to fill the byte heatmap.
                     </td>
                   </tr>
                 ) : (
-                  records.map((rec) => (
-                    <tr
-                      key={keyOf(rec)}
-                      onClick={() => setSelectedKey(keyOf(rec))}
-                      className={`cursor-pointer transition-colors ${
-                        selectedRecord && keyOf(selectedRecord) === keyOf(rec)
-                          ? 'bg-cyan-950/30 border-l-2 border-cyan-400'
-                          : 'hover:bg-surface-elevated/40'
-                      }`}
-                    >
-                      <td className="py-2 px-3 font-bold text-cyan-400">
-                        {rec.idHex}
-                        <span className="block text-[9px] font-normal text-slate-500">{rec.bus}</span>
-                      </td>
-                      <td className="py-2 px-3 text-slate-300 font-medium truncate max-w-[160px]">
-                        {rec.name || '-'}
-                      </td>
-                      {Array.from({ length: 8 }).map((_, bIdx) => {
-                        const byteVal = rec.currentBytes[bIdx] ?? 0;
-                        const status = rec.byteStatuses[bIdx] ?? 'static';
-                        const isNotched = rec.notchedBytes[bIdx] ?? false;
-
-                        return (
-                          <td key={bIdx} className="py-2 px-1 text-center">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onToggleNotch(keyOf(rec), bIdx);
-                              }}
-                              className={`w-7 h-6 rounded font-mono text-[11px] border transition-all ${getStatusColor(
-                                status,
-                                isNotched
-                              )}`}
-                              title={`Byte ${bIdx}: 0x${byteVal.toString(16).toUpperCase().padStart(2, '0')} (${byteVal})\nChanges: ${rec.changeCounts[bIdx]}\nClick to Toggle Notch Filter`}
-                            >
-                              {byteVal.toString(16).toUpperCase().padStart(2, '0')}
-                            </button>
+                  records.map((rec) => {
+                    const key = keyOf(rec);
+                    const sel = key === selKey;
+                    const total = rec.changeCounts.reduce((a, b) => a + b, 0);
+                    return (
+                      <tr
+                        key={key}
+                        data-row-key={key}
+                        onClick={() => setSelectedKey(key)}
+                        className={cn('cursor-pointer align-top', sel ? 'bg-term-row' : 'hover:bg-term-raise')}
+                      >
+                        <td className={cn(TD, 'pl-[6px] pr-0')}>
+                          <GutterMark cursor={sel} />
+                        </td>
+                        <td className={TD}>
+                          <span className="block text-term-hi">{rec.idHex}</span>
+                          <span className="block text-term-faint">{rec.bus}</span>
+                        </td>
+                        <td className={cn(TD, 'overflow-hidden text-ellipsis', rec.bus === 'vehicle' ? 'text-term-dim' : 'text-term-fg')} title={rec.name}>
+                          {rec.name || <Na />}
+                        </td>
+                        {Array.from({ length: 8 }, (_, bIdx) => (
+                          <td key={bIdx} className={TD}>
+                            {bIdx < rec.currentBytes.length ? (
+                              <HeatByte
+                                idx={bIdx}
+                                value={rec.currentBytes[bIdx] ?? 0}
+                                status={rec.byteStatuses[bIdx] ?? 'static'}
+                                notched={rec.notchedBytes[bIdx] ?? false}
+                                changes={rec.changeCounts[bIdx] ?? 0}
+                                onToggle={() => onToggleNotch(key, bIdx)}
+                              />
+                            ) : (
+                              <Na />
+                            )}
                           </td>
-                        );
-                      })}
-                      <td className="py-2 px-3 text-right">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedKey(keyOf(rec));
-                          }}
-                          className="p-1 rounded bg-surface hover:bg-surface-elevated text-slate-400 hover:text-cyan-300 border border-surface-border"
-                          title="Inspect 64-bit Layout & Waterfall"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                        ))}
+                        <td className={cn(TD, 'text-right text-term-dim')}>{total.toLocaleString()}</td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
           ) : (
-            /* Flow View Waterfall (Sequential Frame Stream of Selected ID) */
-            <div className="flex flex-col h-full overflow-auto p-3 gap-2">
-              <div className="bg-surface/60 border border-surface-border rounded p-2.5 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <Waves className="w-4 h-4 text-cyan-400" />
-                  <span className="font-semibold text-slate-200">
-                    Flow Waterfall Stream for {selectedRecord?.idHex} ({selectedRecord?.name || 'Unknown'})
-                  </span>
-                </div>
-                <span className="text-[10px] text-slate-400">Showing last 16 consecutive frames</span>
-              </div>
-
-              {selectedRecord && selectedRecord.frameHistory && selectedRecord.frameHistory.length > 0 ? (
-                <div className="flex flex-col gap-1">
-                  {selectedRecord.frameHistory.map((histFrame, idx) => {
-                    const prevHist = idx > 0 ? selectedRecord.frameHistory[idx - 1] : null;
-
-                    return (
-                      <div
-                        key={idx}
-                        className="bg-surface/40 hover:bg-surface-elevated border border-surface-border rounded p-2 flex items-center justify-between font-mono text-xs transition-colors"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="text-slate-500 text-[10px] w-6">#{idx + 1}</span>
-                          <span className="text-slate-400 w-20">{histFrame.timestamp.toFixed(3)}s</span>
-                        </div>
-
-                        {/* 8 Bytes with Delta Highlight vs Previous Frame in Waterfall */}
-                        <div className="flex items-center gap-1.5">
-                          {histFrame.data.map((byte, bIdx) => {
-                            const isDifferent = prevHist && prevHist.data[bIdx] !== byte;
-                            return (
-                              <span
-                                key={bIdx}
-                                className={`inline-block w-7 text-center py-0.5 rounded text-[11px] font-mono border ${
-                                  isDifferent
-                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/60 font-bold animate-pulse'
-                                    : 'bg-slate-900/60 text-slate-400 border-surface-border'
-                                }`}
-                              >
-                                {byte.toString(16).toUpperCase().padStart(2, '0')}
-                              </span>
-                            );
-                          })}
-                        </div>
-
-                        <div className="text-[10px] text-slate-500 w-24 text-right">
-                          {idx === 0 ? 'Anchor' : `Δ Frame #${idx}`}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="text-center text-slate-500 py-16">
-                  No frame history recorded yet for this ID.
-                </div>
-              )}
-            </div>
+            <FlowView record={selectedRecord} />
           )}
         </div>
 
-        {/* Right Side: 64-Bit Transition & Type Classifier Inspector */}
-        <div className="w-full md:w-96 bg-surface/60 p-4 flex flex-col gap-4 overflow-auto">
-          <div className="flex items-center justify-between border-b border-surface-border pb-2">
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4 text-cyan-400" />
-              <span className="font-semibold text-slate-200">Bit Transition Matrix</span>
-            </div>
-            {selectedRecord && (
-              <span className="font-bold text-cyan-400">{selectedRecord.idHex}</span>
-            )}
-          </div>
-
-          {selectedRecord ? (
-            <div className="flex flex-col gap-3">
-              <div className="bg-background border border-surface-border rounded p-2.5 flex flex-col gap-1">
-                <div className="text-[10px] text-slate-400 uppercase tracking-wider">Target ID</div>
-                <div className="font-semibold text-slate-200 text-sm flex items-center justify-between">
-                  <span>{selectedRecord.name || 'Unknown'}</span>
-                  <span className="text-xs text-cyan-400">{selectedRecord.idHex}</span>
-                </div>
-                <div className="text-slate-400 text-[11px]">DLC: {selectedRecord.dlc} Bytes</div>
-              </div>
-
-              {/* Bit Frequency Classifier Legend */}
-              <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                <div className="p-1 rounded bg-cyan-950/30 border border-cyan-800 text-cyan-300 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" />
-                  <span>Fast (≥45 % of frames)</span>
-                </div>
-                <div className="p-1 rounded bg-amber-950/30 border border-amber-800 text-amber-300 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" />
-                  <span>Active (5–45 %)</span>
-                </div>
-                <div className="p-1 rounded bg-emerald-950/30 border border-emerald-800 text-emerald-300 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" />
-                  <span>Rare (&lt;5 %)</span>
-                </div>
-                <div className="p-1 rounded bg-slate-900 border border-surface-border text-slate-500 flex items-center gap-1">
-                  <span>Static (never)</span>
-                </div>
-              </div>
-
-              {/* 64-Bit Inspection Blocks */}
-              <div className="flex flex-col gap-2">
-                <div className="text-[10px] text-slate-400 uppercase tracking-wider">Bit Transitions (0 ↔ 1)</div>
-                {selectedRecord.currentBytes.map((byte, bIdx) => (
-                  <div key={bIdx} className="bg-background border border-surface-border rounded p-2 flex flex-col gap-1">
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className="text-slate-400 font-semibold">
-                        Byte {bIdx} (0x{byte.toString(16).toUpperCase().padStart(2, '0')})
-                      </span>
-                      <span className="text-cyan-400 font-semibold">{byte} dec</span>
-                    </div>
-
-                    {/* 8 Bits with classification and flip counter badge */}
-                    <div className="grid grid-cols-8 gap-1 text-center font-mono text-[10px]">
-                      {Array.from({ length: 8 }).map((_, bitIdx) => {
-                        const bitPos = 7 - bitIdx;
-                        const isSet = (byte & (1 << bitPos)) !== 0;
-                        const globalBitIdx = bIdx * 8 + bitIdx;
-                        const flips = selectedRecord.bitFlips ? selectedRecord.bitFlips[globalBitIdx] || 0 : 0;
-                        const classification = classifyBit(flips, selectedRecord.framesCompared);
-
-                        return (
-                          <div
-                            key={bitIdx}
-                            className={`py-1 rounded border flex flex-col items-center justify-center transition-all ${
-                              isSet
-                                ? 'border-cyan-500/60 font-bold'
-                                : 'border-surface-border'
-                            } ${classification.color}`}
-                            title={`Bit ${globalBitIdx} (Byte ${bIdx}.${bitPos})\nValue: ${isSet ? 1 : 0}\nTransitions: ${flips}\nType: ${classification.label}`}
-                          >
-                            <span>{isSet ? '1' : '0'}</span>
-                            <span className="text-[8px] opacity-75">{flips > 99 ? '99+' : flips}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="text-center text-slate-500 py-12">
-              Select a CAN ID from the table to inspect bit transitions.
-            </div>
-          )}
-        </div>
+        <aside aria-label="Bit transitions" className="w-[300px] shrink-0 overflow-y-auto border-l border-term-rule bg-term-raise">
+          <BitPane record={selectedRecord} />
+        </aside>
       </div>
+
+      <PanelFooter
+        keys={[
+          { k: 'j/k', label: 'Select id' },
+          { k: 'V', label: viewMode === 'heatmap' ? 'Flow' : 'Heatmap' },
+          { k: 'I', label: 'Invert notch' },
+          { k: 'R', label: 'Reset notches' },
+        ]}
+        legend={<span className="text-term-faint">click a byte to notch (mute) it</span>}
+      />
     </div>
   );
 };
+
+/** Last frames of one id, bytes changed against the frame above highlighted. */
+const FlowView: React.FC<{ record?: ByteSnifferRecord }> = ({ record }) => {
+  const hist = record?.frameHistory ?? [];
+  return (
+    <>
+      <div className="flex justify-between border-b border-term-rule px-[14px] py-[6px]">
+        <span>
+          <span className="font-semibold text-term-hi">Flow</span>{' '}
+          {record ? (
+            <>
+              <span className="text-term-hi">{record.idHex}</span> <span className="text-term-fg">{record.name || ''}</span>
+            </>
+          ) : (
+            <Na />
+          )}
+        </span>
+        <span className="text-term-dim">last {hist.length} frames</span>
+      </div>
+      {hist.length === 0 ? (
+        <p className="px-[14px] py-6 italic text-term-dim">No frame history for this id yet.</p>
+      ) : (
+        <table className="w-full table-fixed border-separate border-spacing-0 text-left">
+          <colgroup>
+            <col style={{ width: '6ch' }} />
+            <col style={{ width: '12ch' }} />
+            <col style={{ width: '31ch' }} />
+            <col />
+          </colgroup>
+          <thead className="sticky top-0 z-10 bg-term-bg">
+            <tr>
+              <th className={cn(TH, 'text-right')}>#</th>
+              <th className={cn(TH, 'text-right')}>time s</th>
+              <th className={TH}>data</th>
+              <th className={cn(TH, 'text-right')}>changed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {hist.map((h, idx) => {
+              const prev = idx > 0 ? hist[idx - 1] : null;
+              const changed = h.data.map((b, i) => prev !== null && prev.data[i] !== b);
+              const n = changed.filter(Boolean).length;
+              return (
+                <tr key={idx} className="hover:bg-term-raise">
+                  <td className={cn(TD, 'text-right text-term-faint')}>{idx + 1}</td>
+                  <td className={cn(TD, 'text-right text-term-dim')}>{h.timestamp.toFixed(3)}</td>
+                  <td className={TD}>
+                    {h.data.map((b, i) => (
+                      <ByteCell key={i} value={b} changed={changed[i]} />
+                    ))}
+                  </td>
+                  <td className={cn(TD, 'text-right', n > 0 ? 'text-term-fg' : 'text-term-faint')}>{prev === null ? 'anchor' : n === 0 ? '–' : `${n} B`}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+};
+
+/** 64-bit transition matrix of the selected id: bit values and flip counts as a text grid. */
+const BitPane: React.FC<{ record?: ByteSnifferRecord }> = ({ record }) => {
+  if (!record) {
+    return (
+      <Pane title="Bit transitions">
+        <Note>Select an id to inspect its bit transitions.</Note>
+      </Pane>
+    );
+  }
+  return (
+    <>
+      <Pane title="Bit transitions" aside={record.idHex}>
+        <KeyValues
+          rows={[
+            ['name', record.name || <Na />],
+            ['bus', record.bus],
+            ['dlc', record.dlc],
+            ['frames compared', record.framesCompared.toLocaleString()],
+          ]}
+        />
+        <div className="mt-2 grid grid-cols-2 gap-x-4">
+          <span className={BIT_TONE.FAST}>FAST ≥ 45 %</span>
+          <span className={BIT_TONE.ACTIVE}>ACTIVE 5–45 %</span>
+          <span className={BIT_TONE.RARE}>RARE &lt; 5 %</span>
+          <span className={BIT_TONE.STATIC}>STATIC never</span>
+        </div>
+      </Pane>
+      <section className="px-[14px] pb-3 pt-[10px]">
+        <div className="grid grid-cols-[5ch_repeat(8,3.4ch)_1fr] text-right">
+          <span className="text-left text-term-dim">bit</span>
+          {Array.from({ length: 8 }, (_, i) => (
+            <span key={i} className="text-term-dim">
+              {7 - i}
+            </span>
+          ))}
+          <span className="text-term-dim">hex</span>
+        </div>
+        {record.currentBytes.map((byte, bIdx) => (
+          <div key={bIdx} className="border-t border-term-rule py-[2px]">
+            <div className="grid grid-cols-[5ch_repeat(8,3.4ch)_1fr] text-right">
+              <span className="text-left text-term-dim">b{bIdx}</span>
+              {Array.from({ length: 8 }, (_, bitIdx) => {
+                const bitPos = 7 - bitIdx;
+                const set = (byte & (1 << bitPos)) !== 0;
+                const flips = record.bitFlips[bIdx * 8 + bitIdx] ?? 0;
+                const cls = classifyBit(flips, record.framesCompared);
+                return (
+                  <span key={bitIdx} className={BIT_TONE[cls]} title={`Bit ${bIdx}.${bitPos}: ${set ? 1 : 0}, ${flips} transitions, ${cls}`}>
+                    {set ? '1' : '0'}
+                  </span>
+                );
+              })}
+              <span className="text-term-fg">{hex2(byte)}</span>
+            </div>
+            <div className="grid grid-cols-[5ch_repeat(8,3.4ch)_1fr] text-right text-term-faint">
+              <span className="text-left">flips</span>
+              {Array.from({ length: 8 }, (_, bitIdx) => {
+                const flips = record.bitFlips[bIdx * 8 + bitIdx] ?? 0;
+                return <span key={bitIdx}>{flips > 99 ? '99+' : flips}</span>;
+              })}
+              <span>{byte}</span>
+            </div>
+          </div>
+        ))}
+      </section>
+    </>
+  );
+};
+
+/** Column head: lowercase, dim, 24px, rule-hi underline. */
+const TH = 'h-6 whitespace-nowrap border-b border-term-ruleHi px-2 font-normal text-term-dim';
+/** Dense cell: 3px 8px, 1px rule underneath. */
+const TD = 'whitespace-nowrap border-b border-term-rule px-2 py-[3px]';
