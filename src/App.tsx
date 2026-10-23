@@ -8,6 +8,7 @@ import { SyncPanel } from './components/SyncPanel';
 import { AttitudeGauge } from './components/AttitudeGauge';
 import { ReplayScrubber } from './components/ReplayScrubber';
 import { HealthPanel } from './components/HealthPanel';
+import { ClusterPanel } from './components/ClusterPanel';
 import { BusRole, CanFrame, CockpitTab, TelemetrySource } from './types/can';
 import { DEFS } from './defs';
 import { CaptureStore } from './state/captureStore';
@@ -272,6 +273,7 @@ export function App() {
           o: () => setActiveTab('oscilloscope'),
           u: () => setActiveTab('uds'),
           h: () => setActiveTab('health'),
+          f: () => setActiveTab('cluster'),
           d: () => setActiveTab('sync'),
           ' ': togglePause,
           c: handleClear,
@@ -349,6 +351,9 @@ export function App() {
               />
             )}
             {activeTab === 'health' && <HealthPanel store={store} />}
+            {activeTab === 'cluster' && (
+              <ClusterPanel store={store} clockRate={source === 'local_file' ? (isReplaying ? playbackSpeed : 0) : isRunning ? 1 : 0} />
+            )}
             {activeTab === 'sync' && <SyncPanel store={store} onLogLoaded={handleLogLoaded} />}
           </main>
 
@@ -410,6 +415,7 @@ const HELP: HelpGroup[] = [
       { k: 'O', label: 'Oscilloscope' },
       { k: 'U', label: 'UDS' },
       { k: 'H', label: 'Health' },
+      { k: 'F', label: 'Cluster' },
       { k: 'D', label: 'Defs & logs' },
     ],
   },

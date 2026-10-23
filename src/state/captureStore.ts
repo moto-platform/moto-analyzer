@@ -41,6 +41,8 @@ export class CaptureStore {
   public busLoad = new Map<string, BusLoad>();
   public totalRx = 0;
   public lastTime = 0;
+  /** Wall clock (performance.now, ms) when the newest frame arrived; 0 before the first. */
+  public lastIngestWallMs = 0;
   public customPlatformDbc: string | null = null;
 
   private meter = new BusLoadMeter();
@@ -62,6 +64,7 @@ export class CaptureStore {
     const key = frameKey(frame.bus, frame.id);
     this.totalRx += 1;
     this.lastTime = frame.timestamp;
+    this.lastIngestWallMs = performance.now();
     this.meter.add(frame);
 
     const prev = this.framesByKey.get(key);
@@ -150,6 +153,7 @@ export class CaptureStore {
     this.busLoad = new Map();
     this.totalRx = 0;
     this.lastTime = 0;
+    this.lastIngestWallMs = 0;
     this.meter.reset();
     this.pipeline.reset();
     this.monitor.reset();
