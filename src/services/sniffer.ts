@@ -44,6 +44,7 @@ export function updateSnifferRecord(existing: ByteSnifferRecord | undefined, fra
 
   return {
     id: frame.id,
+    bus: frame.bus,
     idHex: frame.idHex,
     name: frame.name,
     dlc: frame.dlc,

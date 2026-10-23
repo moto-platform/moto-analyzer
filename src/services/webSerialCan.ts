@@ -1,5 +1,4 @@
-import { CanFrame, DbcMessageDef } from '../types/can';
-import { decodeFrameSignals } from './dbcParser';
+import { BusRole, CanFrame } from '../types/can';
 
 /**
  * WebSerial CAN Adapter supporting standard SLCAN (Lawicel ASCII protocol)
@@ -11,16 +10,10 @@ export class WebSerialCanAdapter {
   private isReading: boolean = false;
   private onFrameCallback: ((frame: CanFrame) => void) | null = null;
   private buffer: string = '';
-  private dbcMessages: DbcMessageDef[] = [];
   private readableStreamClosed: Promise<void> | null = null;
 
-  constructor(dbcMessages: DbcMessageDef[]) {
-    this.dbcMessages = dbcMessages;
-  }
-
-  public updateDbc(dbcMessages: DbcMessageDef[]) {
-    this.dbcMessages = dbcMessages;
-  }
+  /** `role` is the bus the adapter is plugged into; it decides how frames are decoded. */
+  constructor(private readonly role: BusRole) {}
 
   public isSupported(): boolean {
     return 'serial' in navigator;
@@ -128,7 +121,7 @@ export class WebSerialCanAdapter {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      const frame = parseSlcanLine(trimmed, this.dbcMessages);
+      const frame = parseSlcanLine(trimmed, this.role);
       if (frame && this.onFrameCallback) this.onFrameCallback(frame);
     }
   }
@@ -141,7 +134,7 @@ export class WebSerialCanAdapter {
  * Remote frames (r/R), status replies and anything malformed return null.
  * Timing (delta, period, frequency) is filled in by the capture pipeline.
  */
-export function parseSlcanLine(line: string, dbcMessages: DbcMessageDef[]): CanFrame | null {
+export function parseSlcanLine(line: string, bus: string): CanFrame | null {
   const isStd = line.startsWith('t');
   const isExt = line.startsWith('T');
   if (!isStd && !isExt) return null;
@@ -160,12 +153,11 @@ export function parseSlcanLine(line: string, dbcMessages: DbcMessageDef[]): CanF
   const data: number[] = [];
   for (let i = 0; i < dataHex.length; i += 2) data.push(parseInt(dataHex.substring(i, i + 2), 16));
 
-  const messageDef = dbcMessages.find((m) => m.id === id);
   const now = performance.now();
   return {
     id,
     idHex: `0x${id.toString(16).toUpperCase().padStart(idLen, '0')}`,
-    bus: 'usb-can0',
+    bus,
     dlc,
     data,
     timestamp: now / 1000,
@@ -174,8 +166,6 @@ export function parseSlcanLine(line: string, dbcMessages: DbcMessageDef[]): CanF
     periodMs: 0,
     frequencyHz: 0,
     count: 1,
-    name: messageDef?.name,
-    decodedSignals: decodeFrameSignals(data, messageDef),
   };
 }
 

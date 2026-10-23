@@ -1,5 +1,4 @@
-import { CanFrame, DbcMessageDef } from '../types/can';
-import { decodeFrameSignals } from './dbcParser';
+import { CanFrame } from '../types/can';
 import { ascChannelToBus } from './exportService';
 
 /**
@@ -7,7 +6,7 @@ import { ascChannelToBus } from './exportService';
  * Standard Vector format:
  *   0.000000 1  0x020           Rx   d 8 10 20 30 40 50 60 70 80
  */
-export function parseVectorAsc(ascText: string, dbcMessages: DbcMessageDef[]): CanFrame[] {
+export function parseVectorAsc(ascText: string): CanFrame[] {
   const lines = ascText.split('\n');
   const frames: CanFrame[] = [];
 
@@ -36,9 +35,6 @@ export function parseVectorAsc(ascText: string, dbcMessages: DbcMessageDef[]): C
         .slice(0, dlc);
       const bus = ascChannelToBus(parseInt(match[2], 10));
 
-      const messageDef = bus === 'vehicle' ? undefined : dbcMessages.find((m) => m.id === id);
-      const decodedSignals = decodeFrameSignals(dataBytes, messageDef);
-
       frames.push({
         id,
         idHex: `0x${id.toString(16).toUpperCase().padStart(isExtended ? 8 : 3, '0')}`,
@@ -51,8 +47,6 @@ export function parseVectorAsc(ascText: string, dbcMessages: DbcMessageDef[]): C
         periodMs: 0,
         frequencyHz: 0,
         count: 1,
-        name: messageDef ? messageDef.name : undefined,
-        decodedSignals,
       });
     }
   }
@@ -64,7 +58,7 @@ export function parseVectorAsc(ascText: string, dbcMessages: DbcMessageDef[]): C
  * Parses CSV log format into CanFrame array
  * Header: Timestamp,DeltaMs,Bus,CAN_ID,Name,DLC,DataHex,DecodedSignals
  */
-export function parseCanCsv(csvText: string, dbcMessages: DbcMessageDef[]): CanFrame[] {
+export function parseCanCsv(csvText: string): CanFrame[] {
   const lines = csvText.split('\n');
   const frames: CanFrame[] = [];
 
@@ -89,8 +83,6 @@ export function parseCanCsv(csvText: string, dbcMessages: DbcMessageDef[]): CanF
 
       if (!Number.isFinite(timestamp) || !Number.isFinite(id)) continue;
       const isExtended = id > 0x7ff;
-      const messageDef = bus === 'vehicle' ? undefined : dbcMessages.find((m) => m.id === id);
-      const decodedSignals = decodeFrameSignals(dataBytes, messageDef);
 
       frames.push({
         id,
@@ -104,8 +96,6 @@ export function parseCanCsv(csvText: string, dbcMessages: DbcMessageDef[]): CanF
         periodMs: 0,
         frequencyHz: 0,
         count: 1,
-        name: messageDef ? messageDef.name : parts[4].replace(/"/g, ''),
-        decodedSignals,
       });
     }
   }

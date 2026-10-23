@@ -1,129 +1,73 @@
 /**
  * Math Channels & Telemetry Signal Calculus Service for moto-analyzer
  *
- * Provides real-time computed channels (derivatives, slip ratios, power indices)
+ * Provides host-side math channels (derivative, difference, product, ratio)
  * and oscilloscope telemetry export (CSV & branded snapshot).
  */
+
+/**
+ * Host-side analysis channels computed from captured series (CANalyzer-style math).
+ * They are not platform signals: derived vehicle signals are defined in
+ * moto-vehicle-defs (derived/) and computed on rt-core / moto-server.
+ */
+export type MathOp = 'derivative' | 'difference' | 'product' | 'ratio';
 
 export interface MathChannelDef {
   id: string;
   label: string;
+  op: MathOp;
+  /** History key of input A (e.g. `EkfLean.LEAN_ANGLE` or `DID.ENGINE_SPEED`). */
+  a: string;
+  /** History key of input B (not used by `derivative`). */
+  b?: string;
+  scale: number;
   unit: string;
   color: string;
-  min: number;
-  max: number;
   enabled: boolean;
-  type: 'wheel_slip' | 'lean_velocity' | 'power_index' | 'custom_diff';
-  primarySignal: string;
-  secondarySignal?: string;
-  scale?: number;
 }
 
-export const DEFAULT_MATH_CHANNELS: MathChannelDef[] = [
-  {
-    id: 'math_wheel_slip',
-    label: 'Wheel Slip Δv',
-    unit: 'km/h',
-    color: '#ec4899', // pink-500
-    min: 0,
-    max: 25,
-    enabled: false,
-    type: 'wheel_slip',
-    primarySignal: 'FrontWheelSpeed',
-    secondarySignal: 'RearWheelSpeed',
-  },
-  {
-    id: 'math_lean_velocity',
-    label: 'Lean Velocity dθ/dt',
-    unit: '°/s',
-    color: '#8b5cf6', // purple-500
-    min: -100,
-    max: 100,
-    enabled: false,
-    type: 'lean_velocity',
-    primarySignal: 'LeanAngle',
-  },
-  {
-    id: 'math_power_index',
-    label: 'Power Demand Index',
-    unit: 'kW·idx',
-    color: '#eab308', // yellow-500
-    min: 0,
-    max: 100,
-    enabled: false,
-    type: 'power_index',
-    primarySignal: 'EngineSpeed',
-    secondarySignal: 'ThrottlePosition',
-    scale: 0.001,
-  },
-];
+export const MATH_OP_LABEL: Record<MathOp, string> = {
+  derivative: 'd(A)/dt',
+  difference: 'A − B',
+  product: 'A × B',
+  ratio: 'A ÷ B',
+};
 
-/**
- * Calculates a derived math channel series from raw signals history
- */
-export function computeMathChannel(
-  mathDef: MathChannelDef,
-  signalsHistory: Map<string, { time: number; value: number }[]>
-): { time: number; value: number }[] {
-  const primary = signalsHistory.get(mathDef.primarySignal) || [];
+type Series = { time: number; value: number }[];
 
-  if (mathDef.type === 'lean_velocity') {
-    // Numerical differentiation: dθ/dt
-    if (primary.length < 2) return [];
-    const result: { time: number; value: number }[] = [];
-    for (let i = 1; i < primary.length; i++) {
-      const dt = primary[i].time - primary[i - 1].time;
-      if (dt > 0.0001 && dt < 1.0) {
-        // limit noise from dropped frames or time jumps
-        const dVal = (primary[i].value - primary[i - 1].value) / dt;
-        result.push({
-          time: primary[i].time,
-          value: parseFloat(dVal.toFixed(2)),
-        });
-      }
-    }
-    return result;
+/** Pairs every A sample with the nearest B sample within `maxGapSec`. */
+function align(a: Series, b: Series, maxGapSec: number): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  let j = 0;
+  for (const p of a) {
+    while (j < b.length - 1 && Math.abs(b[j + 1].time - p.time) <= Math.abs(b[j].time - p.time)) j++;
+    if (b.length && Math.abs(b[j].time - p.time) <= maxGapSec) out.push([p.time, p.value, b[j].value]);
   }
+  return out;
+}
 
-  const secondary = mathDef.secondarySignal ? signalsHistory.get(mathDef.secondarySignal) || [] : [];
-  if (primary.length === 0 || secondary.length === 0) return [];
-
-  // Timestamp alignment with nearest-neighbor search within 100ms window
-  const result: { time: number; value: number }[] = [];
-  let secIdx = 0;
-
-  for (let i = 0; i < primary.length; i++) {
-    const pPt = primary[i];
-
-    // advance secondary index to find closest timestamp
-    while (secIdx < secondary.length - 1 && Math.abs(secondary[secIdx + 1].time - pPt.time) <= Math.abs(secondary[secIdx].time - pPt.time)) {
-      secIdx++;
+/** Computes a math channel; samples farther apart than 1 s are not combined or differentiated. */
+export function computeMathChannel(def: MathChannelDef, history: Map<string, Series>): Series {
+  const a = history.get(def.a) ?? [];
+  if (def.op === 'derivative') {
+    const out: Series = [];
+    for (let i = 1; i < a.length; i++) {
+      const dt = a[i].time - a[i - 1].time;
+      if (dt > 1e-6 && dt < 1.0) out.push({ time: a[i].time, value: ((a[i].value - a[i - 1].value) / dt) * def.scale });
     }
-
-    const sPt = secondary[secIdx];
-    if (Math.abs(sPt.time - pPt.time) <= 0.15) {
-      // within 150ms
-      let val = 0;
-
-      if (mathDef.type === 'wheel_slip') {
-        // |Front - Rear|
-        val = Math.abs(pPt.value - sPt.value);
-      } else if (mathDef.type === 'power_index') {
-        // (RPM * Throttle%) * scale
-        const scale = mathDef.scale ?? 0.001;
-        val = (pPt.value * sPt.value) * scale;
-      } else if (mathDef.type === 'custom_diff') {
-        val = pPt.value - sPt.value;
-      }
-
-      result.push({
-        time: pPt.time,
-        value: parseFloat(val.toFixed(2)),
-      });
-    }
+    return out;
   }
-
-  return result;
+  const b = def.b ? history.get(def.b) ?? [] : [];
+  return align(a, b, 0.15).flatMap(([time, va, vb]) => {
+    let v: number;
+    if (def.op === 'difference') v = va - vb;
+    else if (def.op === 'product') v = va * vb;
+    else {
+      if (vb === 0) return [];
+      v = va / vb;
+    }
+    return [{ time, value: v * def.scale }];
+  });
 }
 
 export interface CsvExportChannel {
@@ -195,6 +139,7 @@ export function captureBrandedSnapshot(
     activeChannelsCount: number;
     timeWindowSec: number;
     platformName?: string;
+    footer?: string;
   }
 ): string {
   // Create an offscreen canvas with same dimensions
@@ -222,14 +167,14 @@ export function captureBrandedSnapshot(
   // Branding text
   ctx.fillStyle = '#f8fafc';
   ctx.font = 'bold 12px "JetBrains Mono", monospace';
-  ctx.fillText('MOTO-ANALYZER SDV OSCILLOSCOPE', 14, 23);
+  ctx.fillText('MOTO-ANALYZER OSCILLOSCOPE', 14, 23);
 
   ctx.fillStyle = '#94a3b8';
   ctx.font = '10px "JetBrains Mono", monospace';
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
   ctx.fillText(
-    `[${metadata.platformName || 'Honda CL250 SDV'}] • Window: ${metadata.timeWindowSec}s • Active Channels: ${metadata.activeChannelsCount} • ${timestamp}`,
-    270,
+    `${metadata.platformName || 'Honda CL250'} • window ${metadata.timeWindowSec} s • ${metadata.activeChannelsCount} channels • ${timestamp}`,
+    250,
     22
   );
 
@@ -239,7 +184,7 @@ export function captureBrandedSnapshot(
 
   ctx.fillStyle = '#64748b';
   ctx.font = '9px "JetBrains Mono", monospace';
-  ctx.fillText('Telemetry Scope Snapshot • Calibrated for CAN bus 500 kbps • Confidential Automotive Test Log', 14, offscreen.height - 6);
+  ctx.fillText(metadata.footer ?? 'moto-analyzer snapshot', 14, offscreen.height - 6);
 
   return offscreen.toDataURL('image/png');
 }

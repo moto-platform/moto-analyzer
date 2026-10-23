@@ -1,12 +1,10 @@
-import { CanFrame, BusStats, DbcMessageDef } from '../types/can';
-import { decodeFrameSignals } from './dbcParser';
+import { CanFrame, BusStats } from '../types/can';
 
 export interface WebSocketStreamOptions {
   url: string;
   onFrame: (frame: CanFrame) => void;
   onStats?: (stats: Partial<BusStats>) => void;
   onStatusChange?: (status: 'connected' | 'connecting' | 'disconnected' | 'error') => void;
-  dbcMessages: DbcMessageDef[];
 }
 
 export class WebSocketStreamClient {
@@ -95,7 +93,7 @@ export class WebSocketStreamClient {
   }
 
   private handleIncomingMessage(msg: unknown) {
-    const parsed = parseStreamMessage(msg, this.options.dbcMessages);
+    const parsed = parseStreamMessage(msg);
     parsed.frames.forEach((f) => this.options.onFrame(f));
     if (parsed.stats && this.options.onStats) this.options.onStats(parsed.stats);
   }
@@ -117,15 +115,13 @@ function hexToBytes(hex: string): number[] | null {
 }
 
 /** Converts one moto-server CanFrameDto (schemas/stream.py) into a CanFrame. */
-export function frameFromDto(raw: any, dbcMessages: DbcMessageDef[]): CanFrame | null {
+export function frameFromDto(raw: any): CanFrame | null {
   if (!raw || typeof raw !== 'object' || typeof raw.id !== 'number') return null;
   const data = typeof raw.data_hex === 'string' ? hexToBytes(raw.data_hex) : null;
   if (!data) return null;
   const id: number = raw.id;
   const isExtended = raw.is_extended === true;
   const bus = channelToBus(raw.channel);
-  // Platform DBC decoding applies to platform-bus frames (and to frames of unknown channel).
-  const messageDef = bus === 'vehicle' ? undefined : dbcMessages.find((m) => m.id === id);
   return {
     id,
     idHex: `0x${id.toString(16).toUpperCase().padStart(isExtended ? 8 : 3, '0')}`,
@@ -138,8 +134,6 @@ export function frameFromDto(raw: any, dbcMessages: DbcMessageDef[]): CanFrame |
     periodMs: 0,
     frequencyHz: 0,
     count: 1,
-    name: messageDef?.name,
-    decodedSignals: decodeFrameSignals(data, messageDef),
   };
 }
 
@@ -157,10 +151,7 @@ function statsFromDto(raw: any): Partial<BusStats> | undefined {
  * envelope ({type, payload}) carrying a frame, a batch or stats. A bare StreamBatchDto
  * or CanFrameDto is accepted too. Unknown or malformed content yields nothing.
  */
-export function parseStreamMessage(
-  msg: unknown,
-  dbcMessages: DbcMessageDef[]
-): { frames: CanFrame[]; stats?: Partial<BusStats> } {
+export function parseStreamMessage(msg: unknown): { frames: CanFrame[]; stats?: Partial<BusStats> } {
   const result: { frames: CanFrame[]; stats?: Partial<BusStats> } = { frames: [] };
   if (!msg || typeof msg !== 'object') return result;
   const m: any = msg;
@@ -168,7 +159,7 @@ export function parseStreamMessage(
   const handleBatch = (batch: any) => {
     if (Array.isArray(batch?.frames)) {
       for (const f of batch.frames) {
-        const frame = frameFromDto(f, dbcMessages);
+        const frame = frameFromDto(f);
         if (frame) result.frames.push(frame);
       }
     }
@@ -177,7 +168,7 @@ export function parseStreamMessage(
 
   if (typeof m.type === 'string' && 'payload' in m) {
     if (m.type === 'frame') {
-      const frame = frameFromDto(m.payload, dbcMessages);
+      const frame = frameFromDto(m.payload);
       if (frame) result.frames.push(frame);
     } else if (m.type === 'batch') {
       handleBatch(m.payload);
@@ -192,7 +183,7 @@ export function parseStreamMessage(
     return result;
   }
 
-  const frame = frameFromDto(m, dbcMessages);
+  const frame = frameFromDto(m);
   if (frame) result.frames.push(frame);
   return result;
 }

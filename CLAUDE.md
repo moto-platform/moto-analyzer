@@ -21,14 +21,20 @@ Real-time CAN bus analyzer and telemetry cockpit (Web Host & Cross-Platform Desk
 ## Build / run
 
 ```bash
+git submodule update --init   # external/moto-vehicle-defs, pinned to a tag
 npm install
-npm run dev      # Launch Web Host dev server on http://localhost:5173
+npm run dev      # Web Host dev server on http://localhost:5173
+npm test         # vitest (tests/), runs against the pinned defs
 npm run build    # Production bundle
 npm run preview  # Preview production build
 ```
 
+Defs are read at build time from `external/moto-vehicle-defs` (`src/defs/index.ts`, Vite `?raw` imports); there is no built-in signal catalog.
+
 ## Context
 
 - Master Plan: `moto-vehicle-defs/docs/ideas/can-analyzer-master-plan.md`
-- DBC Definitions: `moto-vehicle-defs/dbc/platform.dbc`, `moto-vehicle-defs/dbc/cl250.dbc`
-- UDS Specifications: `moto-vehicle-defs/uds/vehicle_cl250.yaml`, `moto-vehicle-defs/uds/iso14229.yaml`
+- DBC Definitions: `external/moto-vehicle-defs/dbc/platform.dbc`, `external/moto-vehicle-defs/dbc/cl250.dbc`
+- UDS Specifications: `external/moto-vehicle-defs/uds/vehicle_cl250.yaml`, `uds/iso14229.yaml`, `uds/obd_catalog.yaml`
+- D-079 windows and limits: `external/moto-vehicle-defs/derived/cl250_derived.yaml`, `limits/platform_limits.yaml`
+- E2E profile: `external/moto-vehicle-defs/docs/e2e-profile.md` (`src/services/e2e.ts`)

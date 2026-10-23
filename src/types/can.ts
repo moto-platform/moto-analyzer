@@ -14,6 +14,8 @@ export interface CanFrame {
   decodedSignals?: Record<string, number | string>;
   prevData?: number[];
   changedBytes?: boolean[];
+  /** E2E receiver status for E2E-protected platform messages (docs/e2e-profile.md). */
+  e2e?: import('../services/e2e').E2EStatus;
 }
 
 export interface DecodedSignal {
@@ -38,6 +40,7 @@ export type ByteActivityStatus = 'static' | 'inc' | 'dec' | 'toggling';
 
 export interface ByteSnifferRecord {
   id: number;
+  bus: string;
   idHex: string;
   name?: string;
   dlc: number;
@@ -77,6 +80,9 @@ export interface DbcSignalDef {
   max: number;
   unit: string;
   comment?: string;
+  receivers?: string[];
+  /** Value table (VAL_): raw value -> name. */
+  values?: Record<number, string>;
 }
 
 export interface DbcMessageDef {
@@ -85,8 +91,23 @@ export interface DbcMessageDef {
   dlc: number;
   sender: string;
   signals: DbcSignalDef[];
+  isExtended?: boolean;
+  /** GenMsgCycleTime attribute in ms (0 or unset = not periodic). */
+  cycleTimeMs?: number;
+  /** E2E profile parameters when E2E_Protected = Yes (docs/e2e-profile.md). */
+  e2e?: { dataId: number };
+  comment?: string;
+}
+
+export interface DbcCatalog {
+  version: string;
+  nodes: { name: string; nodeId?: number; comment?: string }[];
+  messages: DbcMessageDef[];
 }
 
 export type CockpitTab = 'trace' | 'sniffer' | 'oscilloscope' | 'uds' | 'health' | 'sync';
 export type TraceMode = 'overwrite' | 'scroll';
 export type TelemetrySource = 'virtual' | 'local_file' | 'websocket' | 'webserial';
+
+/** Bus a source's frames belong to: decides which defs catalog decodes them. */
+export type BusRole = 'vehicle' | 'platform';
