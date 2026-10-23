@@ -2,52 +2,223 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+/*
+ * Direction C, "restrained workshop terminal".
+ * Every colour is an RGB triplet so Tailwind can apply alpha (`rgb(var(--t-x) / <alpha-value>)`).
+ * In plain CSS or inline styles use `rgb(var(--t-x))`.
+ * Low-chroma warm greys only; amber and red are the only hues. No gradients, glow or shadows.
+ */
+:root,
+:root[data-theme='dark'] {
   color-scheme: dark;
+  --t-bg: 23 22 20; /* #171614 page, table */
+  --t-raise: 30 29 26; /* #1e1d1a header strip, side panel, key bar */
+  --t-row: 35 33 30; /* #23211e cursor row, changed-byte cell */
+  --t-rule: 47 45 41; /* #2f2d29 1px grid */
+  --t-rule-hi: 69 66 60; /* #45423c table head underline, frame, input underline, boxed buttons */
+  --t-fg: 212 207 196; /* #d4cfc4 data, decoded values */
+  --t-hi: 243 238 228; /* #f3eee4 ids, changed bytes, big readouts */
+  --t-dim: 141 136 126; /* #8d887e keys, column heads, secondary labels */
+  --t-faint: 113 108 100; /* #716c64 unchanged bytes, units, n/a (lifted from #5f5b54 to reach 3:1) */
+  --t-amber: 224 162 70; /* #e0a246 key hints, active tab, cursor, caret, attention */
+  --t-amber-bg: 58 44 22; /* #3a2c16 attention fill (reserved) */
+  --t-red: 232 102 91; /* #e8665b faults only (lifted from #e2584d to reach 4.5:1 on red-bg) */
+  --t-red-bg: 61 28 25; /* #3d1c19 fault cell fill */
 }
 
-body {
-  margin: 0;
-  padding: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  overflow: hidden;
-  height: 100vh;
-  width: 100vw;
-  background-color: #090d16;
-  color: #f1f5f9;
+:root[data-theme='light'] {
+  color-scheme: light;
+  --t-bg: 244 241 234; /* #f4f1ea warm paper */
+  --t-raise: 235 231 222; /* #ebe7de */
+  --t-row: 226 221 210; /* #e2ddd2 */
+  --t-rule: 217 211 199; /* #d9d3c7 */
+  --t-rule-hi: 178 170 155; /* #b2aa9b */
+  --t-fg: 47 43 37; /* #2f2b25 warm ink */
+  --t-hi: 20 18 14; /* #14120e */
+  --t-dim: 99 93 83; /* #635d53 */
+  --t-faint: 125 119 108; /* #7d776c */
+  --t-amber: 138 86 0; /* #8a5600 darkened amber */
+  --t-amber-bg: 242 226 194; /* #f2e2c2 */
+  --t-red: 179 38 30; /* #b3261e */
+  --t-red-bg: 245 218 213; /* #f5dad5 */
 }
 
-/* Custom dark scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: #090d16;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #475569;
-}
-
-/* Automotive CAN byte change animations */
-@keyframes byte-highlight-change {
-  0% {
-    background-color: rgba(245, 158, 11, 0.4);
-    color: #fde047;
+@layer base {
+  html,
+  body {
+    height: 100%;
   }
-  100% {
-    background-color: transparent;
+
+  body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    width: 100vw;
+    background-color: rgb(var(--t-bg));
+    color: rgb(var(--t-fg));
+    font-family: 'Iosevka', 'DejaVu Sans Mono', monospace;
+    font-size: 12.5px;
+    line-height: 18px;
+    font-variant-numeric: tabular-nums;
+    font-variant-ligatures: none;
+    font-feature-settings: 'calt' 0, 'liga' 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    font-variant-numeric: inherit;
     color: inherit;
   }
+
+  ::selection {
+    background: rgb(var(--t-amber));
+    color: rgb(var(--t-bg));
+  }
+
+  :focus {
+    outline: none;
+  }
+
+  :focus-visible {
+    outline: 1px solid rgb(var(--t-amber));
+    outline-offset: -1px;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: rgb(var(--t-faint));
+  }
 }
 
+/* Square, quiet scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgb(var(--t-bg));
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--t-rule-hi));
+}
+::-webkit-scrollbar-corner {
+  background: rgb(var(--t-bg));
+}
+* {
+  scrollbar-color: rgb(var(--t-rule-hi)) rgb(var(--t-bg));
+  scrollbar-width: thin;
+}
+
+@layer components {
+  /* Text input with a 1px underline, no box (filter fields, value fields). */
+  .term-input {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid rgb(var(--t-rule-hi));
+    padding: 0 2px;
+    line-height: 18px;
+    color: rgb(var(--t-fg));
+    caret-color: rgb(var(--t-amber));
+    border-radius: 0;
+  }
+  .term-input:focus-visible {
+    outline: none;
+    border-bottom-color: rgb(var(--t-amber));
+  }
+
+  .term-select {
+    background: rgb(var(--t-bg));
+    border: 1px solid rgb(var(--t-rule-hi));
+    border-radius: 0;
+    padding: 0 4px;
+    line-height: 18px;
+    color: rgb(var(--t-fg));
+  }
+
+  /* Block caret drawn by hand (e.g. in an empty filter); the only thing that moves. */
+  .term-caret {
+    display: inline-block;
+    width: 7px;
+    height: 14px;
+    background: rgb(var(--t-amber));
+    vertical-align: -2px;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .term-caret {
+      animation: term-blink 1.1s steps(1) infinite;
+    }
+  }
+
+  /* Range input as a 1px rule with a narrow amber thumb (replay scrubber). */
+  .term-range {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    height: 18px;
+    cursor: pointer;
+    margin: 0;
+  }
+  .term-range::-webkit-slider-runnable-track {
+    height: 1px;
+    background: rgb(var(--t-rule-hi));
+  }
+  .term-range::-moz-range-track {
+    height: 1px;
+    background: rgb(var(--t-rule-hi));
+  }
+  .term-range::-moz-range-progress {
+    height: 1px;
+    background: rgb(var(--t-fg));
+  }
+  .term-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 3px;
+    height: 13px;
+    margin-top: -6px;
+    background: rgb(var(--t-amber));
+    border: 0;
+    border-radius: 0;
+  }
+  .term-range::-moz-range-thumb {
+    width: 3px;
+    height: 13px;
+    background: rgb(var(--t-amber));
+    border: 0;
+    border-radius: 0;
+  }
+  .term-range:focus-visible {
+    outline: 1px solid rgb(var(--t-amber));
+    outline-offset: 2px;
+  }
+}
+
+@keyframes term-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/*
+ * Changed CAN byte: fg-hi on bg-row with a 1px fg-dim underline. Static, no animation
+ * (motion is reserved for the caret).
+ */
 .byte-changed {
-  animation: byte-highlight-change 0.4s ease-out;
+  color: rgb(var(--t-hi));
+  background: rgb(var(--t-row));
+  box-shadow: inset 0 -1px 0 rgb(var(--t-dim));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
