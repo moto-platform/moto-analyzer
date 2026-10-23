@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
-import { Upload, RefreshCw, FolderSync, FileSpreadsheet, ShieldCheck, AlertTriangle } from 'lucide-react';
+import React, { useRef, useState } from 'react';
 import { CanFrame, DbcMessageDef } from '../types/can';
 import { CaptureStore } from '../state/captureStore';
 import { parseDbcText } from '../services/dbcParser';
 import { parseVectorAsc, parseCanCsv } from '../services/logParser';
+import { Na, Note, TermButton, Toolbar, cn } from '../ui/primitives';
+import { useHotkeys } from '../ui/keys';
+import { GutterMark, ListHead, TD, TH } from '../ui/panel-parts';
 
 interface SyncPanelProps {
   store: CaptureStore;
@@ -12,11 +14,15 @@ interface SyncPanelProps {
 
 type Selection = { kind: 'msg'; id: number } | { kind: 'dids' };
 
+const id3 = (id: number) => `0x${id.toString(16).toUpperCase().padStart(3, '0')}`;
+
 export const SyncPanel: React.FC<SyncPanelProps> = ({ store, onLogLoaded }) => {
   const defs = store.defs;
   const catalog = store.pipeline.catalog('platform');
   const [selection, setSelection] = useState<Selection>({ kind: 'msg', id: catalog[0]?.id ?? 0 });
   const [status, setStatus] = useState<string>('');
+  const dbcInput = useRef<HTMLInputElement>(null);
+  const logInput = useRef<HTMLInputElement>(null);
 
   const selectedMsg: DbcMessageDef | undefined = selection.kind === 'msg' ? catalog.find((m) => m.id === selection.id) : undefined;
 
@@ -64,183 +70,196 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, onLogLoaded }) => {
     });
   };
 
+  // j/k walk the list (platform messages, then the UDS DID entry). App owns the GLOBAL_KEYS.
+  const move = (delta: number) => {
+    const entries: Selection[] = [...catalog.map((m) => ({ kind: 'msg', id: m.id }) as Selection), { kind: 'dids' }];
+    const i = entries.findIndex((e) => (e.kind === 'dids' ? selection.kind === 'dids' : selection.kind === 'msg' && selection.id === e.id));
+    const next = entries[Math.max(0, Math.min(entries.length - 1, (i < 0 ? 0 : i) + delta))];
+    if (next) setSelection(next);
+  };
+  useHotkeys({
+    j: () => move(1),
+    k: () => move(-1),
+    b: () => dbcInput.current?.click(),
+    r: () => store.customPlatformDbc && resetDefs(),
+    g: () => logInput.current?.click(),
+  });
+
+  const rowClass = (on: boolean) => cn('flex w-full items-baseline gap-[1ch] whitespace-nowrap px-[6px] py-[3px] text-left border-b border-term-rule', on ? 'bg-term-row' : 'hover:bg-term-row');
+
   return (
-    <div className="flex flex-col h-full bg-background font-mono text-xs select-none">
-      <div className="bg-surface/80 border-b border-surface-border px-4 py-2 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <FolderSync className="w-4 h-4 text-cyan-400" />
-          <span className="font-semibold text-slate-200">moto-vehicle-defs {defs.ref}</span>
-          <span className="text-[10px] text-slate-400">platform.dbc{defs.platform.version && ` (VERSION "${defs.platform.version}")`} · cl250.dbc · uds/vehicle_cl250.yaml</span>
-        </div>
-        {store.customPlatformDbc ? (
-          <span className="flex items-center gap-1.5 text-amber-300 text-[11px]">
-            <AlertTriangle className="w-3.5 h-3.5" /> custom DBC active: {store.customPlatformDbc}
+    <div className="flex h-full select-none flex-col bg-term-bg">
+      <Toolbar>
+        <span>
+          <span className="font-semibold text-term-hi">moto-vehicle-defs {defs.ref}</span>{' '}
+          <span className="text-term-dim">
+            platform.dbc{defs.platform.version && ` (VERSION "${defs.platform.version}")`} · cl250.dbc · uds/vehicle_cl250.yaml
           </span>
-        ) : (
-          <span className="flex items-center gap-1.5 text-emerald-300 text-[11px]">
-            <ShieldCheck className="w-3.5 h-3.5" /> decoding from the pinned defs only
-          </span>
-        )}
-      </div>
+        </span>
+        <span className="ml-auto">
+          {store.customPlatformDbc ? (
+            <span className="text-term-amber">! custom DBC: {store.customPlatformDbc}</span>
+          ) : (
+            <span className="text-term-dim">decoding from the pinned defs only</span>
+          )}
+        </span>
+      </Toolbar>
 
-      {status && <div className="px-4 py-1.5 border-b border-surface-border text-[11px] text-slate-300 bg-surface/40">{status}</div>}
+      {status && <div className="shrink-0 border-b border-term-rule px-[14px] leading-[24px] text-term-fg">{status}</div>}
 
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-        <div className="w-full md:w-80 border-r border-surface-border p-3 flex flex-col gap-3 overflow-auto">
-          <div className="text-[10px] text-slate-400 uppercase font-semibold">Platform bus ({catalog.length} messages)</div>
-          {catalog.map((msg) => (
-            <button
-              key={msg.id}
-              onClick={() => setSelection({ kind: 'msg', id: msg.id })}
-              className={`text-left p-2 rounded border ${
-                selectedMsg?.id === msg.id ? 'bg-cyan-950/30 border-cyan-500/50' : 'bg-surface/50 border-surface-border hover:bg-surface-elevated'
-              }`}
-            >
-              <div className="flex justify-between">
-                <span className="font-bold text-cyan-400">0x{msg.id.toString(16).toUpperCase().padStart(3, '0')}</span>
-                <span className="text-[10px] text-slate-500">{msg.sender}</span>
-              </div>
-              <div className="text-slate-200 truncate">{msg.name}</div>
-              <div className="text-[10px] text-slate-400">
-                {msg.cycleTimeMs ? `${msg.cycleTimeMs} ms` : 'event'} · {msg.signals.length} signals{msg.e2e ? ' · E2E' : ''}
-              </div>
-            </button>
-          ))}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <nav aria-label="Definitions" className="flex w-[330px] shrink-0 flex-col overflow-y-auto border-r border-term-rule bg-term-raise">
+          <ListHead aside={`${catalog.length} messages`}>platform bus</ListHead>
+          {catalog.map((msg) => {
+            const on = selectedMsg?.id === msg.id;
+            return (
+              <button key={msg.id} type="button" onClick={() => setSelection({ kind: 'msg', id: msg.id })} className={rowClass(on)} aria-current={on}>
+                <GutterMark cursor={on} />
+                <span className="w-[5ch] text-term-hi">{id3(msg.id)}</span>
+                <span className={cn('min-w-0 flex-1 truncate', on ? 'text-term-hi' : 'text-term-fg')}>{msg.name}</span>
+                <span className="text-term-faint">
+                  {msg.cycleTimeMs ? `${msg.cycleTimeMs} ms` : 'event'}
+                  {msg.e2e ? ' e2e' : ''}
+                </span>
+              </button>
+            );
+          })}
 
-          <div className="text-[10px] text-slate-400 uppercase font-semibold mt-2">Vehicle bus</div>
-          <div className="p-2 rounded border border-surface-border text-[11px] text-slate-400">
+          <ListHead className="mt-3">vehicle bus</ListHead>
+          <div className="border-b border-term-rule px-[14px] py-[3px] text-term-dim">
             cl250.dbc: {defs.vehicleDbc.messages.length} broadcast messages (skeleton until Q-001). ECU data comes by UDS polling.
           </div>
-          <button
-            onClick={() => setSelection({ kind: 'dids' })}
-            className={`text-left p-2 rounded border ${selection.kind === 'dids' ? 'bg-cyan-950/30 border-cyan-500/50' : 'bg-surface/50 border-surface-border hover:bg-surface-elevated'}`}
-          >
-            <div className="text-slate-200">UDS DIDs</div>
-            <div className="text-[10px] text-slate-400">
-              {defs.vehicle.dids.length} polled ({defs.vehicle.dids.filter((d) => d.verified).length} verified) · {defs.identification.length} identification
-            </div>
+          <button type="button" onClick={() => setSelection({ kind: 'dids' })} className={rowClass(selection.kind === 'dids')} aria-current={selection.kind === 'dids'}>
+            <GutterMark cursor={selection.kind === 'dids'} />
+            <span className={cn('flex-1', selection.kind === 'dids' ? 'text-term-hi' : 'text-term-fg')}>UDS DIDs</span>
+            <span className="text-term-faint">
+              {defs.vehicle.dids.length} polled, {defs.vehicle.dids.filter((d) => d.verified).length} verified
+            </span>
           </button>
 
-          <div className="mt-2 pt-3 border-t border-surface-border flex flex-col gap-2">
-            <span className="text-[10px] text-slate-400 uppercase font-semibold">Analyse with another DBC</span>
-            <label className="flex items-center justify-center gap-2 p-2 border-2 border-dashed border-surface-border hover:border-amber-500/50 rounded cursor-pointer">
-              <Upload className="w-4 h-4 text-amber-400" />
-              <span className="text-slate-300 text-[11px]">Load .dbc for the platform bus</span>
-              <input type="file" accept=".dbc" onChange={handleDbcUpload} className="hidden" />
-            </label>
-            <button
-              onClick={resetDefs}
-              disabled={!store.customPlatformDbc}
-              className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded bg-surface-elevated text-slate-300 border border-surface-border disabled:opacity-40"
-            >
-              <RefreshCw className="w-3.5 h-3.5" /> Back to defs {defs.ref}
-            </button>
+          <ListHead className="mt-3">analyse with another DBC</ListHead>
+          <div className="flex flex-col items-start px-[8px] py-[6px]">
+            <TermButton hotkey="B" onClick={() => dbcInput.current?.click()}>
+              load .dbc for the platform bus
+            </TermButton>
+            <TermButton hotkey="R" onClick={resetDefs} disabled={!store.customPlatformDbc}>
+              back to defs {defs.ref}
+            </TermButton>
+            <input ref={dbcInput} type="file" accept=".dbc" onChange={handleDbcUpload} className="hidden" tabIndex={-1} />
           </div>
 
-          <div className="pt-3 border-t border-surface-border flex flex-col gap-2">
-            <span className="text-[10px] text-slate-400 uppercase font-semibold">Replay a log</span>
-            <label className="flex items-center justify-center gap-2 p-2 border-2 border-dashed border-surface-border hover:border-cyan-500/50 rounded cursor-pointer">
-              <FileSpreadsheet className="w-4 h-4 text-cyan-400" />
-              <span className="text-slate-300 text-[11px]">Load .asc or .csv</span>
-              <input type="file" accept=".asc,.csv" onChange={handleLogUpload} className="hidden" />
-            </label>
-            <span className="text-[10px] text-slate-500">ASC channel 1 = vehicle bus, 2 = platform bus (moto-server convention).</span>
+          <ListHead>replay a log</ListHead>
+          <div className="flex flex-col items-start px-[8px] py-[6px]">
+            <TermButton hotkey="G" onClick={() => logInput.current?.click()}>
+              load .asc or .csv
+            </TermButton>
+            <input ref={logInput} type="file" accept=".asc,.csv" onChange={handleLogUpload} className="hidden" tabIndex={-1} />
+            <Note className="mt-1 px-[8px] text-term-faint">ASC channel 1 = vehicle bus, 2 = platform bus (moto-server convention).</Note>
           </div>
-        </div>
+        </nav>
 
-        <div className="flex-1 p-4 overflow-auto">
+        <div className="min-w-0 flex-1 overflow-auto">
           {selection.kind === 'dids' ? (
-            <table className="w-full text-left text-[11px]">
-              <thead className="text-slate-400 text-[10px] sticky top-0 bg-background">
-                <tr>
-                  <th className="py-1.5 pr-2">DID</th>
-                  <th className="py-1.5 pr-2">NAME</th>
-                  <th className="py-1.5 pr-2 text-right">BYTES</th>
-                  <th className="py-1.5 pr-2">SCALING</th>
-                  <th className="py-1.5 pr-2">UNIT</th>
-                  <th className="py-1.5 pr-2 text-right">POLL ms</th>
-                  <th className="py-1.5 pr-2 text-right">STALE ms</th>
-                  <th className="py-1.5 pr-2">REPUBLISHED AS</th>
-                  <th className="py-1.5">VERIFIED</th>
-                </tr>
-              </thead>
-              <tbody>
-                {defs.vehicle.dids.map((d) => (
-                  <tr key={d.did} className="border-t border-surface-border/40">
-                    <td className="py-1 pr-2 text-cyan-400">0x{d.did.toString(16).toUpperCase()}</td>
-                    <td className="py-1 pr-2 text-slate-200" title={d.description}>
-                      {d.name}
-                    </td>
-                    <td className="py-1 pr-2 text-right text-slate-400">{d.length}</td>
-                    <td className="py-1 pr-2 text-slate-400">
-                      × {d.factorNum}/{d.factorDen} {d.offset !== 0 ? `${d.offset > 0 ? '+' : ''}${d.offset}` : ''}
-                    </td>
-                    <td className="py-1 pr-2 text-slate-400">{d.unit}</td>
-                    <td className="py-1 pr-2 text-right text-slate-400">{d.pollPeriodMs}</td>
-                    <td className="py-1 pr-2 text-right text-slate-400">{d.staleAfterMs}</td>
-                    <td className="py-1 pr-2 text-slate-400">{d.platformSignal ?? '–'}</td>
-                    <td className={`py-1 ${d.verified ? 'text-emerald-300' : 'text-amber-300'}`}>{d.verified ? 'yes' : 'no'}</td>
+            <>
+              <div className="px-[14px] pb-2 pt-[10px]">
+                <span className="font-semibold text-term-hi">UDS DIDs</span>{' '}
+                <span className="text-term-dim">
+                  uds/vehicle_cl250.yaml · {defs.identification.length} identification DIDs in uds/obd_catalog.yaml
+                </span>
+              </div>
+              <table className="w-full border-collapse">
+                <thead className="sticky top-0 bg-term-bg">
+                  <tr>
+                    <th className={cn(TH, 'pl-[14px]')}>did</th>
+                    <th className={TH}>name</th>
+                    <th className={cn(TH, 'text-right')}>bytes</th>
+                    <th className={TH}>scaling</th>
+                    <th className={TH}>unit</th>
+                    <th className={cn(TH, 'text-right')}>poll ms</th>
+                    <th className={cn(TH, 'text-right')}>stale ms</th>
+                    <th className={TH}>republished as</th>
+                    <th className={TH}>verified</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {defs.vehicle.dids.map((d) => (
+                    <tr key={d.did}>
+                      <td className={cn(TD, 'pl-[14px] text-term-hi')}>0x{d.did.toString(16).toUpperCase()}</td>
+                      <td className={TD} title={d.description}>
+                        {d.name}
+                      </td>
+                      <td className={cn(TD, 'text-right')}>{d.length}</td>
+                      <td className={cn(TD, 'text-term-dim')}>
+                        × {d.factorNum}/{d.factorDen} {d.offset !== 0 ? `${d.offset > 0 ? '+' : ''}${d.offset}` : ''}
+                      </td>
+                      <td className={cn(TD, 'text-term-faint')}>{d.unit || <Na />}</td>
+                      <td className={cn(TD, 'text-right')}>{d.pollPeriodMs}</td>
+                      <td className={cn(TD, 'text-right')}>{d.staleAfterMs}</td>
+                      <td className={cn(TD, 'text-term-dim')}>{d.platformSignal ?? <Na />}</td>
+                      <td className={TD}>{d.verified ? <span className="text-term-dim">yes</span> : <span className="text-term-amber">! no</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           ) : selectedMsg ? (
-            <div className="flex flex-col gap-3">
-              <div className="bg-surface/60 border border-surface-border rounded p-3 flex flex-col gap-1">
-                <div className="text-base font-bold text-slate-100">
-                  {selectedMsg.name} <span className="text-xs font-normal text-cyan-400">0x{selectedMsg.id.toString(16).toUpperCase().padStart(3, '0')}</span>
+            <>
+              <div className="border-b border-term-rule px-[14px] pb-2 pt-[10px]">
+                <div>
+                  <span className="font-semibold text-term-hi">{selectedMsg.name}</span> <span className="text-term-hi">{id3(selectedMsg.id)}</span>
                 </div>
-                <div className="text-slate-400 text-[11px]">
-                  sender {selectedMsg.sender} · DLC {selectedMsg.dlc} · {selectedMsg.cycleTimeMs ? `cycle ${selectedMsg.cycleTimeMs} ms` : 'no cycle time'}
+                <div className="text-term-dim">
+                  sender {selectedMsg.sender} · dlc {selectedMsg.dlc} · {selectedMsg.cycleTimeMs ? `cycle ${selectedMsg.cycleTimeMs} ms` : 'no cycle time'}
                   {selectedMsg.e2e && ` · E2E DataID 0x${selectedMsg.e2e.dataId.toString(16).toUpperCase()}`}
                 </div>
-                {selectedMsg.comment && <p className="text-[11px] text-slate-300 leading-relaxed mt-1">{selectedMsg.comment}</p>}
+                {selectedMsg.comment && <p className="mt-1 max-w-[110ch] text-term-dim">{selectedMsg.comment}</p>}
               </div>
-              <table className="w-full text-left text-[11px]">
-                <thead className="text-slate-400 text-[10px]">
+              <table className="w-full border-collapse">
+                <thead className="sticky top-0 bg-term-bg">
                   <tr>
-                    <th className="py-1.5 pr-2">SIGNAL</th>
-                    <th className="py-1.5 pr-2 text-center">START</th>
-                    <th className="py-1.5 pr-2 text-center">LEN</th>
-                    <th className="py-1.5 pr-2">ORDER</th>
-                    <th className="py-1.5 pr-2 text-right">FACTOR</th>
-                    <th className="py-1.5 pr-2 text-right">OFFSET</th>
-                    <th className="py-1.5 pr-2 text-right">RANGE</th>
-                    <th className="py-1.5 pr-2">UNIT</th>
-                    <th className="py-1.5">VALUES / RECEIVERS</th>
+                    <th className={cn(TH, 'pl-[14px]')}>signal</th>
+                    <th className={cn(TH, 'text-right')}>start</th>
+                    <th className={cn(TH, 'text-right')}>len</th>
+                    <th className={TH}>order</th>
+                    <th className={cn(TH, 'text-right')}>factor</th>
+                    <th className={cn(TH, 'text-right')}>offset</th>
+                    <th className={cn(TH, 'text-right')}>range</th>
+                    <th className={TH}>unit</th>
+                    <th className={TH}>values / receivers</th>
                   </tr>
                 </thead>
                 <tbody>
                   {selectedMsg.signals.map((sig) => (
-                    <tr key={sig.name} className="border-t border-surface-border/40 align-top">
-                      <td className="py-1 pr-2 text-cyan-300 font-semibold" title={sig.comment}>
+                    <tr key={sig.name}>
+                      <td className={cn(TD, 'pl-[14px] text-term-fg')} title={sig.comment}>
                         {sig.name}
                       </td>
-                      <td className="py-1 pr-2 text-center text-slate-300">{sig.startBit}</td>
-                      <td className="py-1 pr-2 text-center text-slate-300">{sig.bitLength}</td>
-                      <td className="py-1 pr-2 text-slate-400">
-                        {sig.isLittleEndian ? 'Intel' : 'Motorola'} {sig.isSigned ? 'signed' : ''}
+                      <td className={cn(TD, 'text-right')}>{sig.startBit}</td>
+                      <td className={cn(TD, 'text-right')}>{sig.bitLength}</td>
+                      <td className={cn(TD, 'text-term-dim')}>
+                        {sig.isLittleEndian ? 'Intel' : 'Motorola'}
+                        {sig.isSigned ? ' signed' : ''}
                       </td>
-                      <td className="py-1 pr-2 text-right text-slate-300">{sig.factor}</td>
-                      <td className="py-1 pr-2 text-right text-slate-300">{sig.offset}</td>
-                      <td className="py-1 pr-2 text-right text-slate-400">
+                      <td className={cn(TD, 'text-right')}>{sig.factor}</td>
+                      <td className={cn(TD, 'text-right')}>{sig.offset}</td>
+                      <td className={cn(TD, 'text-right text-term-dim')}>
                         [{sig.min} | {sig.max}]
                       </td>
-                      <td className="py-1 pr-2 text-amber-400">{sig.unit || '–'}</td>
-                      <td className="py-1 text-slate-400">
+                      <td className={cn(TD, 'text-term-faint')}>{sig.unit || <Na />}</td>
+                      <td className={cn(TD, 'whitespace-normal text-term-dim')}>
                         {sig.values
                           ? Object.entries(sig.values)
                               .map(([k, v]) => `${k}=${v}`)
                               .join(' · ')
-                          : sig.receivers?.join(', ')}
+                          : sig.receivers?.join(', ') || <Na />}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </>
           ) : (
-            <div className="text-slate-500 py-12 text-center">Select a message.</div>
+            <div className="px-[14px] py-6 text-term-faint">Select a message.</div>
           )}
         </div>
       </div>

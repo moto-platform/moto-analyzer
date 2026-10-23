@@ -150,6 +150,15 @@ export function captureBrandedSnapshot(
     timeWindowSec: number;
     platformName?: string;
     footer?: string;
+  },
+  /** Theme colours (CSS colour strings) so the snapshot matches the active theme. */
+  colors: { band: string; rule: string; title: string; text: string; faint: string; font: string } = {
+    band: 'rgba(23, 22, 20, 0.88)',
+    rule: '#e0a246',
+    title: '#f3eee4',
+    text: '#8d887e',
+    faint: '#716c64',
+    font: 'Iosevka, monospace',
   }
 ): string {
   // Create an offscreen canvas with same dimensions
@@ -163,37 +172,37 @@ export function captureBrandedSnapshot(
   ctx.drawImage(canvas, 0, 0);
 
   // Draw Watermark Overlay Banner at top
-  ctx.fillStyle = 'rgba(9, 13, 22, 0.85)';
+  ctx.fillStyle = colors.band;
   ctx.fillRect(0, 0, offscreen.width, 36);
 
   // Border line under header
-  ctx.strokeStyle = '#06b6d4';
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = colors.rule;
+  ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, 36);
   ctx.lineTo(offscreen.width, 36);
   ctx.stroke();
 
   // Branding text
-  ctx.fillStyle = '#f8fafc';
-  ctx.font = 'bold 12px "JetBrains Mono", monospace';
-  ctx.fillText('MOTO-ANALYZER OSCILLOSCOPE', 14, 23);
+  ctx.fillStyle = colors.title;
+  ctx.font = `600 12px ${colors.font}`;
+  ctx.fillText('moto-analyzer oscilloscope', 14, 23);
 
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '10px "JetBrains Mono", monospace';
+  ctx.fillStyle = colors.text;
+  ctx.font = `11px ${colors.font}`;
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
   ctx.fillText(
-    `${metadata.platformName || 'Honda CL250'} • window ${metadata.timeWindowSec} s • ${metadata.activeChannelsCount} channels • ${timestamp}`,
+    `${metadata.platformName || 'Honda CL250'} · window ${metadata.timeWindowSec} s · ${metadata.activeChannelsCount} channels · ${timestamp}`,
     250,
     22
   );
 
   // Bottom footer watermark
-  ctx.fillStyle = 'rgba(9, 13, 22, 0.75)';
+  ctx.fillStyle = colors.band;
   ctx.fillRect(0, offscreen.height - 20, offscreen.width, 20);
 
-  ctx.fillStyle = '#64748b';
-  ctx.font = '9px "JetBrains Mono", monospace';
+  ctx.fillStyle = colors.faint;
+  ctx.font = `10px ${colors.font}`;
   ctx.fillText(metadata.footer ?? 'moto-analyzer snapshot', 14, offscreen.height - 6);
 
   return offscreen.toDataURL('image/png');

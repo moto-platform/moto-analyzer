@@ -15,6 +15,9 @@ import { useCapture } from './state/useCapture';
 import { VirtualCanBus } from './services/virtualBus';
 import { WebSerialCanAdapter } from './services/webSerialCan';
 import { WebSocketStreamClient } from './services/streamClient';
+import { ThemeContext, useTheme } from './ui/theme';
+import { focusPanelFilter, useHotkeys } from './ui/keys';
+import { KeyBar, KeyHelp, type HelpGroup } from './ui/KeyBar';
 
 /** Frames replayed silently to rebuild the views after a backward seek. */
 const REPLAY_REBUILD_WINDOW = 2000;
@@ -244,89 +247,188 @@ export function App() {
   const totalReplayDuration = replayFrames[replayFrames.length - 1]?.timestamp ?? 0;
   const canTransmit = source === 'virtual' && isRunning;
 
+  // ------------------------------------------------------------ theme and keys
+
+  const { theme, toggleTheme } = useTheme();
+  const [showKeys, setShowKeys] = useState<boolean>(false);
+  const mainRef = useRef<HTMLElement>(null);
+  const hasReplay = source === 'local_file' || replayFrames.length > 0;
+
+  // In log replay, space drives the replay transport instead of the live source.
+  const togglePause = () => {
+    if (source === 'local_file') {
+      if (replayFrames.length > 0) setIsReplaying(!isReplaying);
+    } else {
+      setRunning(!isRunning);
+    }
+  };
+
+  useHotkeys(
+    showKeys
+      ? { Escape: () => setShowKeys(false), '?': () => setShowKeys(false) }
+      : {
+          t: () => setActiveTab('trace'),
+          s: () => setActiveTab('sniffer'),
+          o: () => setActiveTab('oscilloscope'),
+          u: () => setActiveTab('uds'),
+          h: () => setActiveTab('health'),
+          d: () => setActiveTab('sync'),
+          ' ': togglePause,
+          c: handleClear,
+          x: () => setShowAttitudeHud((v) => !v),
+          l: toggleTheme,
+          '/': () => focusPanelFilter(mainRef.current),
+          '?': () => setShowKeys(true),
+        }
+  );
+
+  const sourceStatus =
+    source === 'virtual'
+      ? `virtual bus ${isRunning ? 'running' : 'paused'}`
+      : source === 'websocket'
+        ? `ws ${wsStatus}${isRunning ? '' : ', paused'}`
+        : source === 'webserial'
+          ? `usb can ${usbRole} bus${isRunning ? '' : ', paused'}`
+          : `log replay ${isReplaying ? 'playing' : 'stopped'}`;
+
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-background text-slate-100 font-sans">
-      <Header
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        isRunning={isRunning}
-        onTogglePlay={() => setRunning(!isRunning)}
-        onClear={handleClear}
-        busLoad={store.busLoad}
-        msgPerSec={msgPerSec}
-        totalRx={store.totalRx}
-        source={source}
-        onSourceChange={handleSourceChange}
-        usbRole={usbRole}
-        onUsbRoleChange={setUsbRole}
-        wsUrl={wsUrl}
-        onWsUrlChange={setWsUrl}
-        wsStatus={wsStatus}
-        defsRef={DEFS.ref}
-        customDbc={store.customPlatformDbc}
-        showAttitudeHud={showAttitudeHud}
-        onToggleAttitudeHud={() => setShowAttitudeHud(!showAttitudeHud)}
-      />
+    <ThemeContext.Provider value={theme}>
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-term-bg text-term-fg">
+        <Header
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          isRunning={isRunning}
+          onTogglePlay={() => setRunning(!isRunning)}
+          onClear={handleClear}
+          busLoad={store.busLoad}
+          msgPerSec={msgPerSec}
+          totalRx={store.totalRx}
+          source={source}
+          onSourceChange={handleSourceChange}
+          usbRole={usbRole}
+          onUsbRoleChange={setUsbRole}
+          wsUrl={wsUrl}
+          onWsUrlChange={setWsUrl}
+          wsStatus={wsStatus}
+          defsRef={DEFS.ref}
+          customDbc={store.customPlatformDbc}
+          showAttitudeHud={showAttitudeHud}
+          onToggleAttitudeHud={() => setShowAttitudeHud(!showAttitudeHud)}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
 
-      {sourceError && (
-        <div className="bg-rose-950/60 border-b border-rose-800 text-rose-200 text-xs font-mono px-4 py-1.5 flex justify-between">
-          <span>{sourceError}</span>
-          <button onClick={() => setSourceError(null)} className="text-rose-300 hover:text-white">
-            dismiss
-          </button>
-        </div>
-      )}
-
-      <div className="flex-1 flex overflow-hidden relative">
-        <main className="flex-1 overflow-hidden">
-          {activeTab === 'trace' && (
-            <TracePanel
-              store={store}
-              triggerArmed={triggerArmed}
-              onArmTrigger={(id) => {
-                triggerIdRef.current = id;
-                setTriggerArmed(id !== null);
-              }}
-            />
-          )}
-          {activeTab === 'sniffer' && <SnifferPanel store={store} />}
-          {activeTab === 'oscilloscope' && <OscilloscopePanel store={store} />}
-          {activeTab === 'uds' && (
-            <UdsPanel
-              store={store}
-              canTransmit={canTransmit}
-              onTransmit={(payload) => virtualBus.injectTesterRequest(payload)}
-            />
-          )}
-          {activeTab === 'health' && <HealthPanel store={store} />}
-          {activeTab === 'sync' && <SyncPanel store={store} onLogLoaded={handleLogLoaded} />}
-        </main>
-
-        {showAttitudeHud && (
-          <div className="absolute bottom-4 right-4 z-20 w-80 shadow-2xl">
-            <AttitudeGauge store={store} />
+        {sourceError && (
+          <div role="alert" className="flex shrink-0 justify-between border-b border-term-rule bg-term-redBg px-[14px] leading-[24px] text-term-red">
+            <span>■ {sourceError}</span>
+            <button type="button" onClick={() => setSourceError(null)} className="text-term-red hover:text-term-hi">
+              dismiss
+            </button>
           </div>
         )}
-      </div>
 
-      {(source === 'local_file' || replayFrames.length > 0) && (
-        <ReplayScrubber
-          isReplaying={isReplaying}
-          onToggleReplay={() => setIsReplaying(!isReplaying)}
-          currentIndex={replayIndex}
-          totalFrames={replayFrames.length}
-          currentTimeSec={currentReplayTime}
-          totalDurationSec={totalReplayDuration}
-          playbackSpeed={playbackSpeed}
-          onSpeedChange={setPlaybackSpeed}
-          onScrub={seekTo}
-          onStepForward={() => seekTo(replayIndexRef.current + 1)}
-          onStepBackward={() => seekTo(replayIndexRef.current - 1)}
-          onRestart={() => seekTo(0)}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <main ref={mainRef} className="min-w-0 flex-1 overflow-hidden">
+            {activeTab === 'trace' && (
+              <TracePanel
+                store={store}
+                triggerArmed={triggerArmed}
+                onArmTrigger={(id) => {
+                  triggerIdRef.current = id;
+                  setTriggerArmed(id !== null);
+                }}
+              />
+            )}
+            {activeTab === 'sniffer' && <SnifferPanel store={store} />}
+            {activeTab === 'oscilloscope' && <OscilloscopePanel store={store} />}
+            {activeTab === 'uds' && (
+              <UdsPanel
+                store={store}
+                canTransmit={canTransmit}
+                onTransmit={(payload) => virtualBus.injectTesterRequest(payload)}
+              />
+            )}
+            {activeTab === 'health' && <HealthPanel store={store} />}
+            {activeTab === 'sync' && <SyncPanel store={store} onLogLoaded={handleLogLoaded} />}
+          </main>
+
+          {showAttitudeHud && (
+            <aside aria-label="Lean and cornering" className="flex w-hud shrink-0 flex-col overflow-y-auto border-l border-term-rule bg-term-raise">
+              <AttitudeGauge store={store} />
+            </aside>
+          )}
+        </div>
+
+        {hasReplay && (
+          <ReplayScrubber
+            isReplaying={isReplaying}
+            onToggleReplay={() => setIsReplaying(!isReplaying)}
+            currentIndex={replayIndex}
+            totalFrames={replayFrames.length}
+            currentTimeSec={currentReplayTime}
+            totalDurationSec={totalReplayDuration}
+            playbackSpeed={playbackSpeed}
+            onSpeedChange={setPlaybackSpeed}
+            onScrub={seekTo}
+            onStepForward={() => seekTo(replayIndexRef.current + 1)}
+            onStepBackward={() => seekTo(replayIndexRef.current - 1)}
+            onRestart={() => seekTo(0)}
+          />
+        )}
+
+        <KeyBar
+          keys={[
+            { k: '?', label: 'Keys' },
+            { k: '/', label: 'Filter' },
+            { k: 'space', label: source === 'local_file' ? (isReplaying ? 'Pause replay' : 'Play replay') : isRunning ? 'Pause' : 'Run' },
+            { k: 'C', label: 'Clear' },
+            { k: 'X', label: 'HUD' },
+            { k: 'L', label: theme === 'dark' ? 'Light' : 'Dark' },
+          ]}
+          status={
+            <>
+              <span>
+                vehicle bus <span className="text-term-fg">listen-only</span>
+              </span>
+              <span className={sourceError ? 'text-term-red' : 'text-term-fg'}>{sourceStatus}</span>
+            </>
+          }
         />
-      )}
-    </div>
+
+        {showKeys && <KeyHelp groups={HELP} onClose={() => setShowKeys(false)} />}
+      </div>
+    </ThemeContext.Provider>
   );
 }
+
+const HELP: HelpGroup[] = [
+  {
+    title: 'Views',
+    keys: [
+      { k: 'T', label: 'CAN trace' },
+      { k: 'S', label: 'Sniffer' },
+      { k: 'O', label: 'Oscilloscope' },
+      { k: 'U', label: 'UDS' },
+      { k: 'H', label: 'Health' },
+      { k: 'D', label: 'Defs & logs' },
+    ],
+  },
+  {
+    title: 'Capture',
+    keys: [
+      { k: 'space', label: 'Pause / run the source (play / pause in log replay)' },
+      { k: 'C', label: 'Clear captured data' },
+      { k: '/', label: 'Focus the filter of this view' },
+    ],
+  },
+  {
+    title: 'Display',
+    keys: [
+      { k: 'X', label: 'Lean & cornering pane' },
+      { k: 'L', label: 'Light / dark theme' },
+      { k: '?', label: 'This help' },
+    ],
+  },
+];
 
 export default App;
