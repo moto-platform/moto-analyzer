@@ -70,7 +70,7 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, onLogLoaded }) => {
         <div className="flex items-center gap-2">
           <FolderSync className="w-4 h-4 text-cyan-400" />
           <span className="font-semibold text-slate-200">moto-vehicle-defs {defs.ref}</span>
-          <span className="text-[10px] text-slate-400">platform.dbc {defs.platform.version && `v${defs.platform.version}`} · cl250.dbc · uds/vehicle_cl250.yaml</span>
+          <span className="text-[10px] text-slate-400">platform.dbc{defs.platform.version && ` (VERSION "${defs.platform.version}")`} · cl250.dbc · uds/vehicle_cl250.yaml</span>
         </div>
         {store.customPlatformDbc ? (
           <span className="flex items-center gap-1.5 text-amber-300 text-[11px]">

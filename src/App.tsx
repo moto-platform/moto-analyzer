@@ -140,9 +140,8 @@ export function App() {
 
   // ------------------------------------------------------------ replay
 
-  useEffect(() => {
-    replayIndexRef.current = replayIndex;
-  }, [replayIndex]);
+  // replayIndexRef is the source of truth for the replay position; every writer sets
+  // it and the state together (a state-to-ref sync effect would lag and rewind it).
 
   const handleLogLoaded = (frames: CanFrame[]) => {
     stopLiveSources();
@@ -185,8 +184,14 @@ export function App() {
       );
       timer = setTimeout(() => {
         if (cancelled) return;
-        replayIndexRef.current = idx + 1;
-        ingest(replayFrames[idx + 1]);
+        // Read the index again: a seek during playback moves it.
+        const next = replayIndexRef.current + 1;
+        if (next >= replayFrames.length) {
+          setIsReplaying(false);
+          return;
+        }
+        replayIndexRef.current = next;
+        ingest(replayFrames[next]);
         step();
       }, waitMs);
     };
