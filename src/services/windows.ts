@@ -1,7 +1,8 @@
 import { Defs, HealthWindowDef, WindowOp } from '../defs/model';
 import { didKey } from './pipeline';
+import { SeriesLike, lowerBound, sampleAt } from '../state/ring';
 
-type Series = { time: number; value: number }[];
+type History = Map<string, SeriesLike>;
 
 export interface InputSource {
   /** History key used, or null when the analyzer cannot observe the input. */
@@ -15,7 +16,7 @@ export interface InputSource {
  * (`DID.NAME`), else the platform signal rt-core republishes it into. Derived signals
  * and sensors (`derived.*`, `sensor.*`) are computed on rt-core and not observable.
  */
-export function resolveInput(defs: Defs, input: string, history: Map<string, Series>): InputSource {
+export function resolveInput(defs: Defs, input: string, history: History): InputSource {
   const [kind, name] = input.split('.', 2);
   if (kind === 'did') {
     const k = didKey(name);
@@ -42,18 +43,6 @@ export function compare(op: WindowOp, a: number, b: number): boolean {
     case 'eq':
       return Math.abs(a - b) < 1e-6;
   }
-}
-
-function valueAt(s: Series | undefined, t: number): number | undefined {
-  if (!s || s.length === 0 || s[0].time > t) return undefined;
-  let lo = 0;
-  let hi = s.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (s[mid].time <= t) lo = mid;
-    else hi = mid - 1;
-  }
-  return s[lo].value;
 }
 
 export interface ConditionState {
@@ -84,11 +73,11 @@ export interface WindowState {
 }
 
 /** Evaluates a window's entry conditions on the captured series at time `now` (seconds). */
-export function evaluateWindow(defs: Defs, w: HealthWindowDef, history: Map<string, Series>, now: number): WindowState {
+export function evaluateWindow(defs: Defs, w: HealthWindowDef, history: History, now: number): WindowState {
   const conditions: ConditionState[] = w.conditions.map((c) => {
     const input = resolveInput(defs, c.input, history);
     const series = input.key ? history.get(input.key) : undefined;
-    const value = valueAt(series, now);
+    const value = sampleAt(series, now);
     return {
       input,
       text: `${c.input} ${OP_TEXT[c.op]} ${c.value}`,
@@ -101,10 +90,18 @@ export function evaluateWindow(defs: Defs, w: HealthWindowDef, history: Map<stri
   const stable: StableState[] = w.stable.map((s) => {
     const input = resolveInput(defs, s.input, history);
     const series = input.key ? history.get(input.key) : undefined;
-    const pts = (series ?? []).filter((p) => p.time >= windowStart && p.time <= now);
-    if (pts.length < 2) return { input, maxSpread: s.maxSpread, holds: null };
-    const vals = pts.map((p) => p.value);
-    const spread = Math.max(...vals) - Math.min(...vals);
+    let lo = Infinity;
+    let hi = -Infinity;
+    let n = 0;
+    if (series) {
+      for (let i = lowerBound(series, windowStart); i < series.length && series.timeAt(i) <= now; i++, n++) {
+        const v = series.valueAt(i);
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    if (n < 2) return { input, maxSpread: s.maxSpread, holds: null };
+    const spread = hi - lo;
     return { input, maxSpread: s.maxSpread, spread, holds: spread <= s.maxSpread };
   });
 
@@ -116,13 +113,19 @@ export function evaluateWindow(defs: Defs, w: HealthWindowDef, history: Map<stri
   let heldForSec = 0;
   const observable = w.conditions.map((c, i) => ({ c, src: conditions[i].input })).filter((x) => x.src.key !== null);
   if (conditionsHold !== false && observable.length > 0 && conditions.every((c) => c.holds !== false)) {
+    // Sample times of the inputs within max_duration before now, newest first.
+    const from = now - w.maxDurationMs / 1000;
     const times = new Set<number>();
-    observable.forEach(({ src }) => (history.get(src.key!) ?? []).forEach((p) => p.time <= now && times.add(p.time)));
+    observable.forEach(({ src }) => {
+      const s = history.get(src.key!);
+      if (!s) return;
+      for (let i = lowerBound(s, from); i < s.length && s.timeAt(i) <= now; i++) times.add(s.timeAt(i));
+    });
     const sorted = [...times].sort((a, b) => b - a);
     let earliest = now;
     for (const t of sorted) {
       const ok = observable.every(({ c, src }) => {
-        const v = valueAt(history.get(src.key!), t);
+        const v = sampleAt(history.get(src.key!), t);
         return v !== undefined && compare(c.op, v, c.value);
       });
       if (!ok) break;

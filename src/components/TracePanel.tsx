@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Search, Layers, List, Download, ArrowUpDown, ShieldAlert } from 'lucide-react';
 import { CanFrame, TraceMode } from '../types/can';
 import { CaptureStore } from '../state/captureStore';
@@ -19,7 +19,9 @@ type SortField = 'id' | 'name' | 'period' | 'freq' | 'count';
 /** E2E bookkeeping fields are summarised in the E2E column, not repeated as signals. */
 const HIDDEN_SIGNALS = new Set(['E2E_CRC', 'E2E_COUNTER']);
 
-const SCROLL_ROWS = 200;
+/** Fixed row height of the scroll log (virtualized: only visible rows are rendered). */
+const ROW_PX = 22;
+const OVERSCAN = 10;
 
 const matches = (f: CanFrame, q: string) =>
   f.idHex.toLowerCase().includes(q) ||
@@ -87,17 +89,42 @@ export const TracePanel: React.FC<TracePanelProps> = ({ store, triggerArmed, onA
     });
   })();
 
-  const scrollFrames = (() => {
-    const out: CanFrame[] = [];
-    for (let i = store.log.length - 1; i >= 0 && out.length < SCROLL_ROWS; i--) {
-      const f = store.log[i];
-      if (!q || matches(f, q)) out.push(f);
+  // ---- scroll log virtualization
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(600);
+  const [follow, setFollow] = useState(true);
+  const log = store.log;
+  // Without a filter the ring is indexed directly; with one, the matching indices are collected.
+  const filtered: number[] | null = mode === 'scroll' && q ? (() => {
+    const idx: number[] = [];
+    for (let i = 0; i < log.length; i++) if (matches(log.at(i), q)) idx.push(i);
+    return idx;
+  })() : null;
+  const rowCount = filtered ? filtered.length : log.length;
+  const rowAt = (r: number) => log.at(filtered ? filtered[r] : r);
+  const first = Math.max(0, Math.floor(scrollTop / ROW_PX) - OVERSCAN);
+  const last = Math.min(rowCount, Math.ceil((scrollTop + viewportH) / ROW_PX) + OVERSCAN);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || mode !== 'scroll') return;
+    setViewportH(el.clientHeight);
+    if (follow) {
+      el.scrollTop = el.scrollHeight;
+      setScrollTop(el.scrollTop);
     }
-    return out.reverse();
-  })();
+  });
+
+  const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    setScrollTop(el.scrollTop);
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - ROW_PX * 2;
+    if (follow !== atBottom) setFollow(atBottom);
+  };
 
   const handleExport = (format: 'asc' | 'csv' | 'json') => {
-    const list = store.log.length > 0 ? store.log : frames;
+    const list = log.length > 0 ? log.toArray() : frames;
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     if (format === 'asc') downloadFile(exportToVectorAsc(list), `can_trace_${ts}.asc`, 'text/plain');
     else if (format === 'csv') downloadFile(exportToCsv(list), `can_trace_${ts}.csv`, 'text/csv');
@@ -178,6 +205,12 @@ export const TracePanel: React.FC<TracePanelProps> = ({ store, triggerArmed, onA
           <span>
             IDs: <strong className="text-cyan-400">{frames.length}</strong>
           </span>
+          {mode === 'scroll' && (
+            <label className="flex items-center gap-1.5 cursor-pointer" title="Keep the newest frame in view">
+              <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
+              follow · {rowCount.toLocaleString()} / {log.capacity.toLocaleString()} frames
+            </label>
+          )}
           <div className="relative">
             <button
               onClick={() => setShowExportMenu(!showExportMenu)}
@@ -205,7 +238,7 @@ export const TracePanel: React.FC<TracePanelProps> = ({ store, triggerArmed, onA
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto" ref={scrollRef} onScroll={mode === 'scroll' ? onScroll : undefined}>
         {mode === 'overwrite' ? (
           <table className="w-full text-left border-collapse">
             <thead className="bg-surface sticky top-0 border-b border-surface-border text-slate-400 text-[11px] font-semibold z-10">
@@ -286,23 +319,28 @@ export const TracePanel: React.FC<TracePanelProps> = ({ store, triggerArmed, onA
                 <th className="py-2 px-3">DECODED</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-surface-border/50 text-[11px]">
-              {scrollFrames.map((frame, idx) => (
-                <tr key={idx} className="hover:bg-surface-elevated/40">
-                  <td className="py-1 px-3 text-slate-400">{frame.timestamp.toFixed(4)}</td>
-                  <td className="py-1 px-3 text-right text-slate-500">{frame.deltaMs.toFixed(2)}</td>
-                  <td className="py-1 px-3 text-slate-400">{frame.bus}</td>
-                  <td className="py-1 px-3 font-bold text-cyan-400">{frame.idHex}</td>
-                  <td className="py-1 px-3 text-slate-200 truncate max-w-[150px]">{frame.name || '–'}</td>
-                  <td className="py-1 px-3 text-center text-slate-400">{frame.dlc}</td>
-                  <td className="py-1 px-3 text-slate-300">{frame.data.map((b) => b.toString(16).toUpperCase().padStart(2, '0')).join(' ')}</td>
-                  <td className="py-1 px-3 text-cyan-300 truncate max-w-sm text-[10px]">
+            <tbody className="text-[11px]">
+              <tr style={{ height: first * ROW_PX }} />
+              {Array.from({ length: Math.max(0, last - first) }, (_, k) => first + k).map((r) => {
+                const frame = rowAt(r);
+                return (
+                <tr key={r} style={{ height: ROW_PX }} className="hover:bg-surface-elevated/40 border-t border-surface-border/40">
+                  <td className="py-0 px-3 whitespace-nowrap text-slate-400">{frame.timestamp.toFixed(4)}</td>
+                  <td className="py-0 px-3 whitespace-nowrap text-right text-slate-500">{frame.deltaMs.toFixed(2)}</td>
+                  <td className="py-0 px-3 whitespace-nowrap text-slate-400">{frame.bus}</td>
+                  <td className="py-0 px-3 whitespace-nowrap font-bold text-cyan-400">{frame.idHex}</td>
+                  <td className="py-0 px-3 whitespace-nowrap text-slate-200 truncate max-w-[150px]">{frame.name || '–'}</td>
+                  <td className="py-0 px-3 whitespace-nowrap text-center text-slate-400">{frame.dlc}</td>
+                  <td className="py-0 px-3 whitespace-nowrap text-slate-300">{frame.data.map((b) => b.toString(16).toUpperCase().padStart(2, '0')).join(' ')}</td>
+                  <td className="py-0 px-3 text-cyan-300 truncate max-w-sm text-[10px] whitespace-nowrap">
                     {decodedChips(frame)
                       .map(({ k, text }) => `${k}=${text}`)
                       .join(', ') || <span className="text-slate-600">–</span>}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
+              <tr style={{ height: Math.max(0, rowCount - last) * ROW_PX }} />
             </tbody>
           </table>
         )}

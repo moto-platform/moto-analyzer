@@ -41,11 +41,13 @@ sources (virtual bus, log replay, WebSocket, SLCAN)
 src/services/pipeline.ts   timing per ID, decode with the bus's DBC, E2E check
 src/services/udsMonitor.ts passive UDS observer of the vehicle bus
         ▼
-src/state/captureStore.ts  frames, log, sniffer, signal history; notifies once per animation frame
+src/state/captureStore.ts  frames, 50k-frame log ring, sniffer, Float64Array signal rings;
+                           UI notified at most every 66 ms, however fast frames arrive
         ▼
 src/components/*           Trace, Sniffer, Oscilloscope, UDS, Health, Defs & Logs, HUD
 ```
 
+- **Throughput:** ingest is O(1) per frame and independent of rendering (`npm test` measures it; about 130k frames/s in CI-class hardware, ~30x a fully loaded 500 kbit/s bus). The scroll log renders only visible rows; the oscilloscope draws on its own animation frames (at most 30 fps for new data) with min-max decimation per pixel column.
 - **Invariant 1:** the analyzer never transmits on a vehicle bus. SLCAN adapters open in listen-only mode (`L`); the UDS composer only reaches the simulated ECU.
 - **Invariant 2:** decoding uses only the pinned defs. Loading another DBC is possible for analysis and is shown as "custom DBC" in the header.
 - **Safety outputs:** the HUD shows the cornering level the safety partition sent (0x023); without a fresh, E2E-valid status it shows UNAVAILABLE, never GREEN.

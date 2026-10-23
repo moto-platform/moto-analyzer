@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { DEFS } from '../src/defs';
 import { evaluateWindow } from '../src/services/windows';
+import { seriesOf } from '../src/state/ring';
 
-const series = (pts: [number, number][]) => pts.map(([time, value]) => ({ time, value }));
+const series = (pts: [number, number][]) => seriesOf(pts.map(([time, value]) => ({ time, value })));
 
 describe('D-079 window entry evaluation', () => {
   const w3 = DEFS.windows.find((w) => w.key === 'W3_WARM_IDLE')!;

@@ -4,6 +4,7 @@ import { FramePipeline, didKey, signalKey } from '../services/pipeline';
 import { UdsMonitor } from '../services/udsMonitor';
 import { BusLoadMeter, frameKey } from '../services/capture';
 import { updateSnifferRecord } from '../services/sniffer';
+import { RingBuffer, SeriesRing } from './ring';
 
 export interface BusLoad {
   loadPct: number;
@@ -16,21 +17,27 @@ export interface SeriesPoint {
   value: number;
 }
 
-export const LOG_CAPACITY = 5000;
-export const HISTORY_CAPACITY = 3000;
+/** Chronological log: 50 000 frames (about 25 s of a fully loaded 500 kbit/s bus). */
+export const LOG_CAPACITY = 50_000;
+/** Samples kept per signal: 12 000 (4 min at 50 Hz), two Float64Arrays each. */
+export const HISTORY_CAPACITY = 12_000;
+/** Tables and text re-render at most this often; the oscilloscope draws on its own animation frames. */
+export const UI_REFRESH_MS = 66;
 
 /**
  * Everything the analyzer has captured, outside React. Sources push frames with
- * `ingest`; panels read through `useCapture` and re-render at most once per animation
- * frame (`notify` is coalesced), however fast frames arrive.
+ * `ingest` (O(1), no React work); panels read through `useCapture`, which re-renders
+ * them at most every UI_REFRESH_MS however fast frames arrive. `dataVersion` changes on
+ * every frame for canvas views that poll it per animation frame.
  */
 export class CaptureStore {
   public readonly pipeline: FramePipeline;
   public readonly monitor: UdsMonitor;
   public framesByKey = new Map<string, CanFrame>();
-  public log: CanFrame[] = [];
+  public log = new RingBuffer<CanFrame>(LOG_CAPACITY);
   public sniffer = new Map<string, ByteSnifferRecord>();
-  public history = new Map<string, SeriesPoint[]>();
+  public history = new Map<string, SeriesRing>();
+  public dataVersion = 0;
   public busLoad = new Map<string, BusLoad>();
   public totalRx = 0;
   public lastTime = 0;
@@ -40,7 +47,6 @@ export class CaptureStore {
   private listeners = new Set<() => void>();
   private version = 0;
   private notifyScheduled = false;
-  private framesThisSecond = 0;
 
   constructor(public readonly defs: Defs) {
     this.pipeline = new FramePipeline(defs.platform.messages, defs.vehicleDbc.messages);
@@ -55,7 +61,6 @@ export class CaptureStore {
     if (frame.bus === 'vehicle' && !frame.name) frame.name = this.udsName(frame.id);
     const key = frameKey(frame.bus, frame.id);
     this.totalRx += 1;
-    this.framesThisSecond += 1;
     this.lastTime = frame.timestamp;
     this.meter.add(frame);
 
@@ -67,7 +72,7 @@ export class CaptureStore {
     });
 
     this.log.push(frame);
-    if (this.log.length > LOG_CAPACITY) this.log.splice(0, this.log.length - LOG_CAPACITY);
+    this.dataVersion++;
 
     this.sniffer.set(key, updateSnifferRecord(this.sniffer.get(key), frame));
 
@@ -94,20 +99,18 @@ export class CaptureStore {
   }
 
   private pushPoint(key: string, time: number, value: number) {
-    let arr = this.history.get(key);
-    if (!arr) {
-      arr = [];
-      this.history.set(key, arr);
+    let ring = this.history.get(key);
+    if (!ring) {
+      ring = new SeriesRing(HISTORY_CAPACITY);
+      this.history.set(key, ring);
     }
-    arr.push({ time, value });
-    if (arr.length > HISTORY_CAPACITY) arr.splice(0, arr.length - HISTORY_CAPACITY);
+    ring.push(time, value);
   }
 
   /** Once per second of wall time: bus load (in source time) and E2E timeouts. */
   public sampleSecond(sourceSec: number) {
     this.busLoad = new Map(this.meter.sample(sourceSec));
     this.pipeline.checkTimeouts(this.lastTime);
-    this.framesThisSecond = 0;
     this.notify();
   }
 
@@ -140,7 +143,8 @@ export class CaptureStore {
 
   public clear() {
     this.framesByKey = new Map();
-    this.log = [];
+    this.log = new RingBuffer<CanFrame>(LOG_CAPACITY);
+    this.dataVersion++;
     this.sniffer = new Map();
     this.history = new Map();
     this.busLoad = new Map();
@@ -161,16 +165,14 @@ export class CaptureStore {
 
   public getVersion = () => this.version;
 
-  /** Coalesces change notifications to one per animation frame. */
+  /** Coalesces change notifications to one per UI_REFRESH_MS. */
   public notify() {
     if (this.notifyScheduled) return;
     this.notifyScheduled = true;
-    const run = () => {
+    setTimeout(() => {
       this.notifyScheduled = false;
       this.version++;
       this.listeners.forEach((fn) => fn());
-    };
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
-    else setTimeout(run, 16);
+    }, UI_REFRESH_MS);
   }
 }

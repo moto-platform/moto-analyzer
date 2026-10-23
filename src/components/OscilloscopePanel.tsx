@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { Crosshair, Camera, Download, Calculator, Plus, X } from 'lucide-react';
-import { CaptureStore, SeriesPoint } from '../state/captureStore';
+import { CaptureStore } from '../state/captureStore';
+import { SeriesLike, lastValue, lowerBound, sampleAt, seriesOf } from '../state/ring';
 import { availableChannels, ChannelInfo } from '../state/channels';
 import { didKey, signalKey } from '../services/pipeline';
 import {
@@ -26,21 +27,83 @@ interface Trace {
   label: string;
   unit: string;
   color: string;
-  points: SeriesPoint[];
+  series: SeriesLike;
   dashed: boolean;
 }
 
-/** Value of a series at time t (last sample at or before t). */
-function valueAt(points: SeriesPoint[], t: number): number | undefined {
-  let lo = 0;
-  let hi = points.length - 1;
-  if (hi < 0 || points[0].time > t) return undefined;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (points[mid].time <= t) lo = mid;
-    else hi = mid - 1;
+const EMPTY = seriesOf([]);
+/** New data is drawn at most at 30 fps; settings and resizes are drawn at once. */
+const SCOPE_FRAME_MS = 33;
+
+/**
+ * Draws one trace between t0 and t1, auto-scaled to its visible range. When there are
+ * more samples than pixel columns, each column draws the min-max span of its samples
+ * (peak-preserving decimation), so cost follows the canvas width, not the data rate.
+ */
+function drawTrace(ctx: CanvasRenderingContext2D, tr: Trace, t0: number, span: number, width: number, height: number, pad: number, dpr: number) {
+  const s = tr.series;
+  const i0 = Math.max(0, lowerBound(s, t0) - 1);
+  const i1 = s.length;
+  if (i1 - i0 < 2) return;
+
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = i0; i < i1; i++) {
+    const v = s.valueAt(i);
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
   }
-  return points[lo].value;
+  if (!Number.isFinite(lo)) return;
+  if (hi - lo < 1e-9) {
+    hi += 1;
+    lo -= 1;
+  }
+  const xOf = (t: number) => ((t - t0) / span) * width;
+  const yOf = (v: number) => height - pad - ((v - lo) / (hi - lo)) * (height - 2 * pad);
+
+  ctx.setLineDash(tr.dashed ? [6 * dpr, 3 * dpr] : []);
+  ctx.strokeStyle = tr.color;
+  ctx.lineWidth = 1.6 * dpr;
+  ctx.beginPath();
+
+  const columns = Math.max(1, Math.floor(width));
+  if (i1 - i0 <= columns * 2) {
+    for (let i = i0; i < i1; i++) {
+      const x = xOf(s.timeAt(i));
+      const y = yOf(s.valueAt(i));
+      if (i === i0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  } else {
+    let col = -1;
+    let cMin = 0;
+    let cMax = 0;
+    let first = true;
+    const flush = () => {
+      if (col < 0) return;
+      if (first) {
+        ctx.moveTo(col, yOf(cMin));
+        first = false;
+      } else ctx.lineTo(col, yOf(cMin));
+      ctx.lineTo(col, yOf(cMax));
+    };
+    for (let i = i0; i < i1; i++) {
+      const c = Math.floor(xOf(s.timeAt(i)));
+      const v = s.valueAt(i);
+      if (c !== col) {
+        flush();
+        col = c;
+        cMin = v;
+        cMax = v;
+      } else {
+        if (v < cMin) cMin = v;
+        if (v > cMax) cMax = v;
+      }
+    }
+    flush();
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
 }
 
 export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) => {
@@ -65,30 +128,68 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
   const channelByKey = useMemo(() => new Map(channels.map((c) => [c.key, c])), [channels]);
   const colorOf = (i: number) => PALETTE[i % PALETTE.length];
 
-  const traces: Trace[] = [
+  /** Traces to draw; math channels are computed only over the visible window (+1 s). */
+  const buildTraces = (fromTime: number): Trace[] => [
     ...enabled.map((key, i) => {
       const info = channelByKey.get(key);
-      return { key, label: info?.label ?? key, unit: info?.unit ?? '', color: colorOf(i), points: store.history.get(key) ?? [], dashed: false };
+      return { key, label: info?.label ?? key, unit: info?.unit ?? '', color: colorOf(i), series: store.history.get(key) ?? EMPTY, dashed: false };
     }),
     ...mathChannels
       .filter((m) => m.enabled)
-      .map((m) => ({ key: m.id, label: `[math] ${m.label}`, unit: m.unit, color: m.color, points: computeMathChannel(m, store.history), dashed: true })),
+      .map((m) => ({
+        key: m.id,
+        label: `[math] ${m.label}`,
+        unit: m.unit,
+        color: m.color,
+        series: seriesOf(computeMathChannel(m, store.history, fromTime)),
+        dashed: true,
+      })),
   ];
 
-  let latestTime = 0;
-  traces.forEach((t) => {
-    const last = t.points[t.points.length - 1];
-    if (last && last.time > latestTime) latestTime = last.time;
-  });
-  if (latestTime === 0) latestTime = store.lastTime;
+  const latestOf = (trs: Trace[]) => {
+    let latest = 0;
+    trs.forEach((t) => {
+      if (t.series.length > 0) latest = Math.max(latest, t.series.timeAt(t.series.length - 1));
+    });
+    return latest === 0 ? store.lastTime : latest;
+  };
+
+  const traces = buildTraces(store.lastTime - timeWindowSec - 1);
+  const latestTime = latestOf(traces);
   const startTime = Math.max(0, latestTime - timeWindowSec);
   const cursorTime = (frac: number) => startTime + frac * timeWindowSec;
 
-  // Render (React re-renders at most once per animation frame via the store).
+  // The canvas draws on its own animation frames, only when data, settings or size changed.
+  const drawConfig = useRef({ buildTraces, timeWindowSec, cursorA, cursorB, latestOf });
+  drawConfig.current = { buildTraces, timeWindowSec, cursorA, cursorB, latestOf };
+  const settingsVersion = useRef(0);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
+    settingsVersion.current++;
+  }, [enabled, mathChannels, timeWindowSec, cursorA, cursorB]);
+
+  useEffect(() => {
+    let raf = 0;
+    let drawnData = -1;
+    let drawnSettings = -1;
+    let drawnW = 0;
+    let drawnH = 0;
+    let lastDraw = 0;
+    const frame = (now: number) => {
+      raf = requestAnimationFrame(frame);
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const settingsChanged = settingsVersion.current !== drawnSettings || rect.width !== drawnW || rect.height !== drawnH;
+      if (!settingsChanged && (store.dataVersion === drawnData || now - lastDraw < SCOPE_FRAME_MS)) return;
+      lastDraw = now;
+      drawnData = store.dataVersion;
+      drawnSettings = settingsVersion.current;
+      drawnW = rect.width;
+      drawnH = rect.height;
+      draw(canvas, rect);
+    };
+    const draw = (canvas: HTMLCanvasElement, rect: DOMRect) => {
+    const { buildTraces: build, timeWindowSec: span, cursorA: cA, cursorB: cB, latestOf: latestFn } = drawConfig.current;
     const dpr = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.floor(rect.width * dpr));
     const height = Math.max(1, Math.floor(rect.height * dpr));
@@ -119,33 +220,10 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
     }
 
     const pad = 14 * dpr;
-    traces.forEach((tr) => {
-      const visible = tr.points.filter((p) => p.time >= startTime && p.time <= latestTime);
-      if (visible.length < 2) return;
-      // Auto-scale each trace to its visible range (the legend shows the values).
-      let lo = Infinity;
-      let hi = -Infinity;
-      visible.forEach((p) => {
-        if (p.value < lo) lo = p.value;
-        if (p.value > hi) hi = p.value;
-      });
-      if (hi - lo < 1e-9) {
-        hi += 1;
-        lo -= 1;
-      }
-      ctx.setLineDash(tr.dashed ? [6 * dpr, 3 * dpr] : []);
-      ctx.strokeStyle = tr.color;
-      ctx.lineWidth = 1.6 * dpr;
-      ctx.beginPath();
-      visible.forEach((p, idx) => {
-        const x = ((p.time - startTime) / timeWindowSec) * width;
-        const y = height - pad - ((p.value - lo) / (hi - lo)) * (height - 2 * pad);
-        if (idx === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-    });
-    ctx.setLineDash([]);
+    const trs = build(store.lastTime - span - 1);
+    const t1 = latestFn(trs);
+    const t0 = Math.max(0, t1 - span);
+    trs.forEach((tr) => drawTrace(ctx, tr, t0, span, width, height, pad, dpr));
 
     const drawCursor = (frac: number, color: string, label: string, row: number) => {
       ctx.strokeStyle = color;
@@ -160,9 +238,12 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
       ctx.font = `${10 * dpr}px monospace`;
       ctx.fillText(label, frac * width + 4 * dpr, 14 * dpr * row);
     };
-    if (cursorA !== null) drawCursor(cursorA, '#f59e0b', 'A', 1);
-    if (cursorB !== null) drawCursor(cursorB, '#06b6d4', 'B', 2);
-  });
+    if (cA !== null) drawCursor(cA, '#f59e0b', 'A', 1);
+    if (cB !== null) drawCursor(cB, '#06b6d4', 'B', 2);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [store]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -177,7 +258,12 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
   };
 
   const handleExportCsv = () => {
-    const data: CsvExportChannel[] = traces.map((t) => ({ name: t.key, label: t.label, unit: t.unit, data: t.points }));
+    const all = buildTraces(-Infinity);
+    const data: CsvExportChannel[] = all.map((t) => {
+      const pts: { time: number; value: number }[] = [];
+      for (let i = 0; i < t.series.length; i++) pts.push({ time: t.series.timeAt(i), value: t.series.valueAt(i) });
+      return { name: t.key, label: t.label, unit: t.unit, data: pts };
+    });
     if (data.length === 0) return;
     const blob = new Blob([exportOscilloscopeCsv(data)], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -241,13 +327,13 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
       <div className="bg-surface/80 border-b border-surface-border px-4 py-2 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-wrap">
           {traces.map((t) => {
-            const last = t.points[t.points.length - 1];
+            const last = lastValue(t.series);
             const isMath = t.key.startsWith('math_');
             return (
               <span key={t.key} className="flex items-center gap-1.5 px-2 py-1 rounded border bg-surface-elevated text-slate-100" style={{ borderColor: t.color }}>
                 <span className="w-2 h-2 rounded-full" style={{ background: t.color }} />
                 <span>{t.label}</span>
-                <strong style={{ color: t.color }}>{last ? formatValue(last.value) : '–'}</strong>
+                <strong style={{ color: t.color }}>{formatValue(last)}</strong>
                 <span className="text-[10px] text-slate-400">{t.unit}</span>
                 <button
                   onClick={() =>
@@ -346,7 +432,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
       <div className="flex-1 relative p-2 overflow-hidden flex flex-col">
         <canvas ref={canvasRef} onClick={handleCanvasClick} className="w-full h-full rounded border border-surface-border cursor-crosshair" />
         <div className="absolute bottom-3 left-4 text-[10px] text-slate-500">
-          {startTime.toFixed(2)} s — {latestTime.toFixed(2)} s · each trace auto-scaled to its visible range · click to place cursors
+          {startTime.toFixed(2)} s — {latestTime.toFixed(2)} s · each trace auto-scaled to its visible range (min-max per pixel when dense) · click to place cursors
         </div>
 
         {(cursorA !== null || cursorB !== null) && (
@@ -364,8 +450,8 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
               <span className="text-right">{cursorA !== null && cursorB !== null ? `${((cursorB - cursorA) * timeWindowSec * 1000).toFixed(1)} ms` : '–'}</span>
             </div>
             {traces.map((t) => {
-              const va = cursorA !== null ? valueAt(t.points, cursorTime(cursorA)) : undefined;
-              const vb = cursorB !== null ? valueAt(t.points, cursorTime(cursorB)) : undefined;
+              const va = cursorA !== null ? sampleAt(t.series, cursorTime(cursorA)) : undefined;
+              const vb = cursorB !== null ? sampleAt(t.series, cursorTime(cursorB)) : undefined;
               return (
                 <div key={t.key} className="grid grid-cols-4 gap-2">
                   <span className="truncate" style={{ color: t.color }} title={t.label}>

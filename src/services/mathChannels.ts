@@ -33,32 +33,42 @@ export const MATH_OP_LABEL: Record<MathOp, string> = {
   ratio: 'A ÷ B',
 };
 
+import { SeriesLike, lowerBound } from '../state/ring';
+
 type Series = { time: number; value: number }[];
 
 /** Pairs every A sample with the nearest B sample within `maxGapSec`. */
-function align(a: Series, b: Series, maxGapSec: number): [number, number, number][] {
+function align(a: SeriesLike, from: number, b: SeriesLike, maxGapSec: number): [number, number, number][] {
   const out: [number, number, number][] = [];
-  let j = 0;
-  for (const p of a) {
-    while (j < b.length - 1 && Math.abs(b[j + 1].time - p.time) <= Math.abs(b[j].time - p.time)) j++;
-    if (b.length && Math.abs(b[j].time - p.time) <= maxGapSec) out.push([p.time, p.value, b[j].value]);
+  if (b.length === 0) return out;
+  let j = Math.max(0, lowerBound(b, a.length ? a.timeAt(from) : 0) - 1);
+  for (let i = from; i < a.length; i++) {
+    const t = a.timeAt(i);
+    while (j < b.length - 1 && Math.abs(b.timeAt(j + 1) - t) <= Math.abs(b.timeAt(j) - t)) j++;
+    if (Math.abs(b.timeAt(j) - t) <= maxGapSec) out.push([t, a.valueAt(i), b.valueAt(j)]);
   }
   return out;
 }
 
-/** Computes a math channel; samples farther apart than 1 s are not combined or differentiated. */
-export function computeMathChannel(def: MathChannelDef, history: Map<string, Series>): Series {
-  const a = history.get(def.a) ?? [];
+const EMPTY: SeriesLike = { length: 0, timeAt: () => 0, valueAt: () => 0 };
+
+/**
+ * Computes a math channel from `fromTime` on; samples farther apart than 1 s are not
+ * differentiated, and A/B samples farther apart than 150 ms are not combined.
+ */
+export function computeMathChannel(def: MathChannelDef, history: Map<string, SeriesLike>, fromTime = -Infinity): Series {
+  const a = history.get(def.a) ?? EMPTY;
+  const from = lowerBound(a, fromTime);
   if (def.op === 'derivative') {
     const out: Series = [];
-    for (let i = 1; i < a.length; i++) {
-      const dt = a[i].time - a[i - 1].time;
-      if (dt > 1e-6 && dt < 1.0) out.push({ time: a[i].time, value: ((a[i].value - a[i - 1].value) / dt) * def.scale });
+    for (let i = Math.max(1, from); i < a.length; i++) {
+      const dt = a.timeAt(i) - a.timeAt(i - 1);
+      if (dt > 1e-6 && dt < 1.0) out.push({ time: a.timeAt(i), value: ((a.valueAt(i) - a.valueAt(i - 1)) / dt) * def.scale });
     }
     return out;
   }
-  const b = def.b ? history.get(def.b) ?? [] : [];
-  return align(a, b, 0.15).flatMap(([time, va, vb]) => {
+  const b = def.b ? history.get(def.b) ?? EMPTY : EMPTY;
+  return align(a, from, b, 0.15).flatMap(([time, va, vb]) => {
     let v: number;
     if (def.op === 'difference') v = va - vb;
     else if (def.op === 'product') v = va * vb;
