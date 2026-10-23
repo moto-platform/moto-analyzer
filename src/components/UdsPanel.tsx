@@ -1,467 +1,411 @@
-import React, { useState } from 'react';
-import {
-  Send,
-  AlertTriangle,
-  Clock,
-  ShieldCheck,
-  Terminal,
-  Layers,
-  ArrowRight,
-  ArrowLeft,
-  CheckCircle2,
-  Lock,
-  Radio,
-} from 'lucide-react';
-import { DtcRecord } from '../types/can';
-import {
-  UDS_SERVICES_CATALOG,
-  composeUdsRequest,
-  generateIsoTpLadderTrace,
-  IsoTpLadderStep,
-} from '../services/udsComposer';
+import React, { useMemo, useState } from 'react';
+import { AlertTriangle, ArrowLeft, ArrowRight, Eye, Layers, Lock, Send, ShieldCheck, Terminal } from 'lucide-react';
+import { CaptureStore } from '../state/captureStore';
+import { UdsTransaction } from '../services/udsMonitor';
+import { composeUdsRequest, composerServices } from '../services/udsComposer';
+import { formatValue, hexId } from '../services/format';
 
-interface UdsLogEntry {
-  timestamp: string;
-  type: 'req' | 'resp';
-  service: string;
-  dataHex: string;
-  decodedDesc: string;
+interface UdsPanelProps {
+  store: CaptureStore;
+  /** True only when the virtual bus is the running source (the simulated ECU). */
+  canTransmit: boolean;
+  onTransmit: (payload: number[]) => { ok: boolean; error?: string };
 }
 
-export const UdsPanel: React.FC = () => {
-  const [selectedSid, setSelectedSid] = useState<number>(0x22);
-  const [selectedSubFunction, setSelectedSubFunction] = useState<number>(0x03);
-  const [selectedDid, setSelectedDid] = useState<string>('0xF190');
-  const [customDidHex, setCustomDidHex] = useState<string>('0xFD01');
-  const [useCustomDid, setUseCustomDid] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'composer' | 'dtcs'>('composer');
+type Tab = 'transactions' | 'dids' | 'dtcs' | 'composer';
 
-  // Active ISO-TP Ladder sequence
-  const [ladderSteps, setLadderSteps] = useState<IsoTpLadderStep[]>(() => {
-    const initialReq = composeUdsRequest(0x22, undefined, [0xF1, 0x90]);
-    return generateIsoTpLadderTrace(initialReq, 'VIN');
-  });
+const hex2 = (b: number) => b.toString(16).toUpperCase().padStart(2, '0');
+const hexBytes = (b: number[]) => b.map(hex2).join(' ');
 
-  const [udsLogs, setUdsLogs] = useState<UdsLogEntry[]>([
-    {
-      timestamp: '14:20:05.120',
-      type: 'req',
-      service: '0x10 DiagnosticSessionControl',
-      dataHex: '10 03 (ExtendedSession)',
-      decodedDesc: 'Tester requested transition to ISO 14229 Extended Diagnostic Session',
-    },
-    {
-      timestamp: '14:20:05.142',
-      type: 'resp',
-      service: '0x50 PositiveResponse',
-      dataHex: '50 03 00 32 01 F4',
-      decodedDesc: 'Session accepted. P2=50ms, P2*=500ms',
-    },
-    {
-      timestamp: '14:20:06.010',
-      type: 'req',
-      service: '0x22 ReadDataByIdentifier',
-      dataHex: '22 F1 90 (VIN)',
-      decodedDesc: 'Multi-frame ISO-TP read of Vehicle Identification Number',
-    },
-    {
-      timestamp: '14:20:06.040',
-      type: 'resp',
-      service: '0x62 PositiveResponse',
-      dataHex: '62 F1 90 4A 48 32 4D 43 35 38 31 32 33 34 35 36 37 38',
-      decodedDesc: 'VIN = "JH2MC5812345678" (Honda CL250 SDV Prototype)',
-    },
-  ]);
+const STATUS_TONE: Record<UdsTransaction['status'], string> = {
+  positive: 'text-emerald-300 border-emerald-700',
+  negative: 'text-rose-300 border-rose-700',
+  pending: 'text-amber-300 border-amber-700',
+  no_response: 'text-rose-300 border-rose-800',
+  suppressed: 'text-slate-400 border-slate-600',
+};
 
-  // Active DTCs
-  const dtcs: DtcRecord[] = [
-    {
-      code: 'P0115',
-      description: 'Engine Coolant Temperature Sensor 1 Circuit Malfunction',
-      statusMask: 0x2F,
-      active: true,
-      pending: false,
-      confirmed: true,
-      freezeFrame: {
-        'Engine Speed': '4250 rpm',
-        'Vehicle Speed': '62.4 km/h',
-        'Coolant Temp': '112 °C',
-        'Throttle Pos': '42 %',
-      },
-    },
-    {
-      code: 'P0500',
-      description: 'Vehicle Speed Sensor "A" Intermittent Signal',
-      statusMask: 0x24,
-      active: false,
-      pending: true,
-      confirmed: false,
-      freezeFrame: {
-        'Engine Speed': '6100 rpm',
-        'Vehicle Speed': '0.0 km/h',
-        'Coolant Temp': '82 °C',
-        'Throttle Pos': '68 %',
-      },
-    },
-  ];
+function parseHexBytes(text: string): number[] | null {
+  const clean = text.replace(/0x/gi, '').replace(/[\s,]+/g, '');
+  if (clean === '') return [];
+  if (clean.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(clean)) return null;
+  const out: number[] = [];
+  for (let i = 0; i < clean.length; i += 2) out.push(parseInt(clean.substring(i, i + 2), 16));
+  return out;
+}
 
-  const currentServiceDef = UDS_SERVICES_CATALOG.find((s) => s.sid === selectedSid);
+export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransmit }) => {
+  const defs = store.defs;
+  const monitor = store.monitor;
+  const addr = defs.vehicle.addressing.primary;
+  const [tab, setTab] = useState<Tab>('transactions');
+  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+  const [hideRoutine, setHideRoutine] = useState(true);
 
-  const handleTransmit = () => {
-    let params: number[] = [];
+  const transactions = monitor.getTransactions();
+  const alerts = monitor.getAlerts();
+  const dids = monitor.getDids();
+  const dtcs = monitor.getDtcs();
 
-    if (selectedSid === 0x22) {
-      const didString = useCustomDid ? customDidHex : selectedDid;
-      const clean = didString.replace('0x', '').padStart(4, '0');
-      const b1 = parseInt(clean.substring(0, 2), 16) || 0;
-      const b2 = parseInt(clean.substring(2, 4), 16) || 0;
-      params = [b1, b2];
+  const shown = (hideRoutine ? transactions.filter((t) => !(t.sid === 0x3e && t.status === 'suppressed')) : [...transactions]).slice(-250).reverse();
+  const selected = transactions.find((t) => t.seq === selectedSeq) ?? shown[0];
+
+  // ---------------------------------------------------------------- composer
+  const services = useMemo(() => composerServices(defs), [defs]);
+  const [sid, setSid] = useState<number>(0x22);
+  const [sub, setSub] = useState<number>(0x03);
+  const [didText, setDidText] = useState<string>('0xF40C');
+  const [extraText, setExtraText] = useState<string>('');
+  const [composerLog, setComposerLog] = useState<string[]>([]);
+  const svc = services.find((s) => s.sid === sid);
+
+  const payload: number[] | null = (() => {
+    const extra = parseHexBytes(extraText);
+    if (extra === null) return null;
+    const p = [sid];
+    if (svc?.subFunctions) p.push(sub);
+    if (svc?.takesDid) {
+      const d = parseHexBytes(didText.replace(/^0x/i, '').padStart(4, '0'));
+      if (!d || d.length !== 2) return null;
+      p.push(...d);
     }
+    return [...p, ...extra];
+  })();
+  const composed = payload ? composeUdsRequest(defs, payload) : null;
 
-    const subFn = currentServiceDef?.subFunctions ? selectedSubFunction : undefined;
-    const compiled = composeUdsRequest(selectedSid, subFn, params);
-
-    if (!compiled.valid) {
-      alert(compiled.errorMessage || 'Invalid UDS Request');
-      return;
-    }
-
-    // Generate ISO-TP Ladder
-    const didName = selectedSid === 0x22 ? (useCustomDid ? customDidHex : selectedDid) : undefined;
-    const newLadder = generateIsoTpLadderTrace(compiled, didName);
-    setLadderSteps(newLadder);
-
-    // Append to log
-    const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false }) + '.' + Math.floor(Math.random() * 900 + 100);
-    const reqLog: UdsLogEntry = {
-      timestamp: timeStr,
-      type: 'req',
-      service: `0x${selectedSid.toString(16).toUpperCase()} ${currentServiceDef?.name || ''}`,
-      dataHex: compiled.rawPayload.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
-      decodedDesc: `ISO-TP Transmit on 0x18DAF110 (${compiled.isoTpType})`,
-    };
-
-    setUdsLogs((prev) => [...prev, reqLog]);
+  const send = () => {
+    if (!payload || !composed?.valid) return;
+    const r = onTransmit(payload);
+    setComposerLog((prev) =>
+      [`${new Date().toLocaleTimeString()} ${hexBytes(payload)} → ${r.ok ? 'sent to the simulated ECU' : `refused: ${r.error}`}`, ...prev].slice(0, 20)
+    );
+    setSelectedSeq(null);
+    setTab('transactions');
   };
+
+  const TabButton: React.FC<{ id: Tab; label: string }> = ({ id, label }) => (
+    <button
+      onClick={() => setTab(id)}
+      className={`flex-1 py-1.5 rounded text-xs font-semibold ${tab === id ? 'bg-purple-500/20 text-purple-200 border border-purple-500/40' : 'text-slate-400 hover:text-slate-200'}`}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div className="flex flex-col h-full bg-background font-mono text-xs select-none">
-      {/* Top Banner */}
-      <div className="bg-surface/80 border-b border-surface-border px-4 py-2 flex items-center justify-between gap-3">
+      <div className="bg-surface/80 border-b border-surface-border px-4 py-2 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="font-semibold text-slate-200">ISO 14229 UDS Diagnostic Console & ISO 15765-2 Packet Ladder</span>
-          <span className="text-[10px] text-cyan-300 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800">
-            Automotive Tester Mode
+          <Eye className="w-4 h-4 text-purple-400" />
+          <span className="font-semibold text-slate-200">UDS observer — vehicle bus</span>
+          <span className="text-[10px] text-slate-400">
+            tester {hexId(addr.requestId, addr.extended)} → ECU {hexId(addr.responseId, addr.extended)} · ISO 14229 / ISO 15765-2
           </span>
         </div>
-
-        <div className="flex items-center gap-2 text-slate-400 text-xs">
+        <div className="flex items-center gap-2 text-[11px]">
           <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          <span className="text-emerald-400 font-semibold">Platform Invariant 1 Active: Read-Only Gated</span>
+          <span className="text-emerald-300">Listen-only · policy from defs {defs.ref}</span>
         </div>
       </div>
 
-      {/* Main Grid */}
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-        {/* Left Side: Composer & DTCs */}
-        <div className="w-full md:w-1/2 border-r border-surface-border p-4 flex flex-col gap-4 overflow-y-auto">
-          {/* Sub-tab navigation */}
-          <div className="flex items-center bg-surface border border-surface-border rounded p-0.5">
-            <button
-              onClick={() => setActiveTab('composer')}
-              className={`flex-1 py-1.5 rounded text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
-                activeTab === 'composer' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Radio className="w-3.5 h-3.5" />
-              <span>Interactive Request Composer</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('dtcs')}
-              className={`flex-1 py-1.5 rounded text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
-                activeTab === 'dtcs' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <AlertTriangle className="w-3.5 h-3.5" />
-              <span>DTC Faults & Freezes ({dtcs.length})</span>
-            </button>
+      {alerts.length > 0 && (
+        <div className="bg-rose-950/40 border-b border-rose-800 px-4 py-1.5 max-h-24 overflow-auto">
+          {alerts
+            .slice(-5)
+            .reverse()
+            .map((a, i) => (
+              <div key={i} className="flex gap-2 text-rose-200 text-[11px]">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span className="text-rose-400">{a.t.toFixed(3)}s</span>
+                <span>{a.text}</span>
+              </div>
+            ))}
+        </div>
+      )}
+
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        <div className="w-full lg:w-3/5 border-r border-surface-border p-3 flex flex-col gap-3 overflow-hidden">
+          <div className="flex items-center bg-surface border border-surface-border rounded p-0.5 gap-0.5">
+            <TabButton id="transactions" label={`Transactions (${transactions.length})`} />
+            <TabButton id="dids" label={`Live DIDs (${dids.length})`} />
+            <TabButton id="dtcs" label={`DTCs (${dtcs.length})`} />
+            <TabButton id="composer" label="Composer (sim)" />
           </div>
 
-          {activeTab === 'composer' ? (
-            <div className="flex flex-col gap-4">
-              {/* Service Selection */}
-              <div className="bg-surface/60 border border-surface-border rounded-lg p-3.5 flex flex-col gap-3">
-                <span className="text-slate-300 font-semibold text-xs flex items-center gap-1.5">
-                  <Layers className="w-4 h-4 text-cyan-400" />
-                  <span>Diagnostic Service (SID)</span>
-                </span>
-
-                <select
-                  value={selectedSid}
-                  onChange={(e) => setSelectedSid(parseInt(e.target.value))}
-                  className="bg-background border border-surface-border rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-                >
-                  {UDS_SERVICES_CATALOG.map((svc) => (
-                    <option key={svc.sid} value={svc.sid} disabled={!svc.isAllowed}>
-                      {svc.sidHex} — {svc.name} {!svc.isAllowed ? '[BLOCKED: INVARIANT 1]' : ''}
-                    </option>
-                  ))}
-                </select>
-
-                <p className="text-[11px] text-slate-400">{currentServiceDef?.description}</p>
-
-                {/* Subfunction selector if present */}
-                {currentServiceDef?.subFunctions && (
-                  <div className="flex flex-col gap-1.5 pt-1">
-                    <span className="text-[11px] text-slate-400">Sub-Function:</span>
-                    <select
-                      value={selectedSubFunction}
-                      onChange={(e) => setSelectedSubFunction(parseInt(e.target.value))}
-                      className="bg-background border border-surface-border rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
+          {tab === 'transactions' && (
+            <div className="flex-1 flex flex-col gap-1 overflow-hidden">
+              <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                <input type="checkbox" checked={hideRoutine} onChange={(e) => setHideRoutine(e.target.checked)} />
+                hide TesterPresent (suppressPosRsp)
+              </label>
+              <div className="flex-1 overflow-auto">
+                {shown.length === 0 ? (
+                  <div className="text-slate-500 py-10 text-center">No UDS traffic seen on the vehicle bus.</div>
+                ) : (
+                  shown.map((t) => (
+                    <button
+                      key={t.seq}
+                      onClick={() => setSelectedSeq(t.seq)}
+                      className={`w-full text-left grid grid-cols-[70px_84px_1fr] gap-2 px-2 py-1 rounded border mb-0.5 ${
+                        selected?.seq === t.seq ? 'bg-purple-950/30 border-purple-600/60' : 'border-transparent hover:bg-surface-elevated/40'
+                      }`}
                     >
-                      {currentServiceDef.subFunctions.map((sub) => (
-                        <option key={sub.id} value={sub.id}>
-                          {sub.name}
+                      <span className="text-slate-500">{t.tStart.toFixed(3)}</span>
+                      <span className={`text-[9px] px-1 py-0.5 rounded border text-center self-start ${STATUS_TONE[t.status]}`}>{t.status}</span>
+                      <span className={t.policy.allowed ? 'text-slate-200' : 'text-rose-300'}>
+                        {!t.policy.allowed && <Lock className="inline w-3 h-3 mr-1" />}
+                        {t.summary || hexBytes(t.request)}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {tab === 'dids' && (
+            <div className="flex-1 overflow-auto">
+              <table className="w-full text-left">
+                <thead className="text-slate-400 text-[10px] sticky top-0 bg-background">
+                  <tr>
+                    <th className="py-1 pr-2">DID</th>
+                    <th className="py-1 pr-2">NAME</th>
+                    <th className="py-1 pr-2 text-right">VALUE</th>
+                    <th className="py-1 pr-2">UNIT</th>
+                    <th className="py-1 pr-2 text-right">AGE ms</th>
+                    <th className="py-1 pr-2 text-right">POLL ms</th>
+                    <th className="py-1 pr-2 text-right">READS</th>
+                    <th className="py-1">STATE</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dids.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="py-10 text-center text-slate-500">
+                        No ReadDataByIdentifier answer seen yet.
+                      </td>
+                    </tr>
+                  )}
+                  {dids.map((d) => {
+                    const ageMs = Math.max(0, (store.lastTime - d.t) * 1000);
+                    const stale = d.def ? ageMs > d.def.staleAfterMs : false;
+                    let state: { text: string; tone: string };
+                    if (d.nrc !== undefined) state = { text: `NRC 0x${hex2(d.nrc)} ${defs.iso.nrcs.get(d.nrc) ?? ''}`, tone: 'text-rose-300' };
+                    else if (stale) state = { text: 'STALE', tone: 'text-amber-300' };
+                    else state = { text: 'FRESH', tone: 'text-emerald-300' };
+                    return (
+                      <tr key={d.did} className="border-t border-surface-border/40">
+                        <td className="py-1 pr-2 text-cyan-400">0x{d.did.toString(16).toUpperCase()}</td>
+                        <td className="py-1 pr-2 text-slate-200">
+                          {d.name}
+                          {d.def && !d.def.verified && <span className="ml-1 text-[9px] text-amber-400">unverified</span>}
+                        </td>
+                        <td className="py-1 pr-2 text-right text-cyan-200 font-semibold">{formatValue(d.value)}</td>
+                        <td className="py-1 pr-2 text-slate-400">{d.unit}</td>
+                        <td className="py-1 pr-2 text-right text-slate-400">{d.count > 0 ? ageMs.toFixed(0) : '–'}</td>
+                        <td className="py-1 pr-2 text-right text-slate-500">{d.def?.pollPeriodMs ?? '–'}</td>
+                        <td className="py-1 pr-2 text-right text-slate-500">{d.count}</td>
+                        <td className={`py-1 ${state.tone}`}>{state.text}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <p className="text-[10px] text-slate-500 mt-2">STALE = older than the DID's stale_after_ms in uds/vehicle_cl250.yaml.</p>
+            </div>
+          )}
+
+          {tab === 'dtcs' && (
+            <div className="flex-1 overflow-auto flex flex-col gap-2">
+              {dtcs.length === 0 ? (
+                <div className="text-slate-500 py-10 text-center leading-relaxed">
+                  No DTC observed. The tester reads DTCs with service 0x19 at key-on and at warm idle (D-080);
+                  <br />
+                  codes appear here when an answer reports one.
+                </div>
+              ) : (
+                dtcs.map((d) => (
+                  <div key={d.dtc} className="bg-surface/60 border border-surface-border rounded p-3 flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-sm text-rose-300">{d.code}</span>
+                      <span className="text-[10px] text-slate-400">status 0x{hex2(d.status)}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {d.statusNames.map((n) => (
+                        <span key={n} className="text-[9px] px-1.5 py-0.5 rounded border border-surface-border text-slate-300">
+                          {n}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      first {d.firstSeen.toFixed(2)} s · last {d.lastSeen.toFixed(2)} s
+                    </div>
+                    {(d.snapshot || d.extData) && (
+                      <div className="text-[10px] text-slate-400">
+                        {d.snapshot && <div>snapshot record: {hexBytes(d.snapshot)}</div>}
+                        {d.extData && <div>extended data: {hexBytes(d.extData)}</div>}
+                        <div className="text-slate-500">Shown raw: record layouts are manufacturer-specific and not yet defined in defs (D-080 item 5).</div>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {tab === 'composer' && (
+            <div className="flex flex-col gap-3 overflow-auto">
+              <div
+                className={`rounded p-2.5 text-[11px] border ${
+                  canTransmit ? 'bg-emerald-950/20 border-emerald-700 text-emerald-200' : 'bg-slate-900 border-surface-border text-slate-400'
+                }`}
+              >
+                The composer sends only to the simulated ECU of the virtual bus. On a real vehicle bus the analyzer stays listen-only: the bus has one
+                tester, rt-core (Invariant 1, D-037).
+              </div>
+              <div className="flex flex-col gap-2 bg-surface/60 border border-surface-border rounded p-3">
+                <label className="flex flex-col gap-1">
+                  <span className="text-slate-400 text-[11px]">Service</span>
+                  <select
+                    value={sid}
+                    onChange={(e) => {
+                      const s = Number(e.target.value);
+                      setSid(s);
+                      const first = services.find((x) => x.sid === s)?.subFunctions?.[0];
+                      if (first) setSub(first.id);
+                    }}
+                    className="bg-background border border-surface-border rounded px-2 py-1.5 text-slate-200"
+                  >
+                    {services.map((s) => (
+                      <option key={s.sid} value={s.sid} disabled={!s.allowed}>
+                        0x{hex2(s.sid)} {s.name}
+                        {!s.allowed ? ' — forbidden by tester_policy' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {svc?.subFunctions && (
+                  <label className="flex flex-col gap-1">
+                    <span className="text-slate-400 text-[11px]">Sub-function</span>
+                    <select value={sub} onChange={(e) => setSub(Number(e.target.value))} className="bg-background border border-surface-border rounded px-2 py-1.5 text-slate-200">
+                      {svc.subFunctions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          0x{hex2(s.id)} {s.name}
                         </option>
                       ))}
                     </select>
-                  </div>
+                  </label>
                 )}
-
-                {/* DID selector for ReadDataByIdentifier (0x22) */}
-                {selectedSid === 0x22 && (
-                  <div className="flex flex-col gap-2 pt-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-slate-400">Data Identifier (DID):</span>
-                      <button
-                        onClick={() => setUseCustomDid((prev) => !prev)}
-                        className="text-[10px] text-cyan-400 hover:underline"
-                      >
-                        {useCustomDid ? 'Use Catalog Preset' : 'Enter Custom Hex'}
-                      </button>
-                    </div>
-
-                    {useCustomDid ? (
-                      <input
-                        type="text"
-                        value={customDidHex}
-                        onChange={(e) => setCustomDidHex(e.target.value)}
-                        placeholder="0xFD01"
-                        className="bg-background border border-surface-border rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-                      />
-                    ) : (
-                      <select
-                        value={selectedDid}
-                        onChange={(e) => setSelectedDid(e.target.value)}
-                        className="bg-background border border-surface-border rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-                      >
-                        <option value="0xF190">0xF190 — VIN (Multi-Frame ISO-TP, 20 Bytes)</option>
-                        <option value="0xFD01">0xFD01 — Engine State & RPM (CL250 Primary)</option>
-                        <option value="0xFD03">0xFD03 — Lean Angle Health (Safety Node IMU)</option>
-                        <option value="0xF187">0xF187 — ECU Hardware Part Number</option>
-                        <option value="0xF189">0xF189 — ECU Calibration Software Number</option>
-                      </select>
-                    )}
-                  </div>
-                )}
-
-                {/* Transmit Button */}
-                <div className="pt-2">
-                  <button
-                    onClick={handleTransmit}
-                    disabled={!currentServiceDef?.isAllowed}
-                    className={`w-full flex items-center justify-center gap-2 py-2 rounded font-semibold text-xs transition-all ${
-                      currentServiceDef?.isAllowed
-                        ? 'bg-cyan-600 hover:bg-cyan-500 text-slate-900 shadow-md shadow-cyan-950/40 cursor-pointer'
-                        : 'bg-rose-950/40 text-rose-400 border border-rose-800 cursor-not-allowed opacity-70'
-                    }`}
-                  >
-                    {currentServiceDef?.isAllowed ? (
-                      <>
-                        <Send className="w-3.5 h-3.5" />
-                        <span>TRANSMIT ISO-TP DIAGNOSTIC REQUEST</span>
-                      </>
-                    ) : (
-                      <>
-                        <Lock className="w-3.5 h-3.5" />
-                        <span>BLOCKED BY INVARIANT 1</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Safety Architecture Callout */}
-              <div className="bg-emerald-950/20 border border-emerald-500/30 rounded-lg p-3 text-[11px] text-emerald-300 leading-relaxed">
-                <strong className="block mb-1 text-emerald-200">ISO 14229 Safety Protocol Compliance:</strong>
-                All diagnostic communications strictly pass through <code className="bg-emerald-950/60 px-1 py-0.5 rounded text-[10px]">moto-vehicle-defs</code> verified gates. Writes, clears, and ECU reprogramming are permanently rejected at the hardware layer.
-              </div>
-            </div>
-          ) : (
-            /* DTCs View */
-            <div className="flex flex-col gap-3">
-              {dtcs.map((dtc) => (
-                <div
-                  key={dtc.code}
-                  className="bg-surface/60 border border-surface-border rounded-lg p-3.5 flex flex-col gap-2 hover:border-slate-600 transition-colors"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-sm text-rose-400">{dtc.code}</span>
-                      <span
-                        className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
-                          dtc.confirmed
-                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                            : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                        }`}
-                      >
-                        {dtc.confirmed ? 'CONFIRMED' : 'PENDING'}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      Status Mask: 0x{dtc.statusMask.toString(16).toUpperCase()}
-                    </span>
-                  </div>
-
-                  <div className="text-slate-300 text-[11px] leading-relaxed">{dtc.description}</div>
-
-                  {/* Freeze Frame Snapshot Card */}
-                  {dtc.freezeFrame && (
-                    <div className="bg-background/80 rounded border border-surface-border p-2.5 mt-1 flex flex-col gap-1.5">
-                      <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-semibold border-b border-surface-border pb-1">
-                        <Clock className="w-3 h-3 text-cyan-400" />
-                        <span>Freeze Frame Snapshot (D-080)</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
-                        {Object.entries(dtc.freezeFrame).map(([k, v]) => (
-                          <div key={k} className="flex items-center justify-between">
-                            <span className="text-slate-400">{k}:</span>
-                            <span className="text-cyan-300 font-bold">{v}</span>
-                          </div>
+                {svc?.takesDid && (
+                  <label className="flex flex-col gap-1">
+                    <span className="text-slate-400 text-[11px]">DID</span>
+                    <select value={didText} onChange={(e) => setDidText(e.target.value)} className="bg-background border border-surface-border rounded px-2 py-1.5 text-slate-200">
+                      <optgroup label="uds/vehicle_cl250.yaml">
+                        {defs.vehicle.dids.map((d) => (
+                          <option key={d.did} value={`0x${d.did.toString(16).toUpperCase()}`}>
+                            0x{d.did.toString(16).toUpperCase()} {d.name}
+                            {d.verified ? '' : ' (unverified)'}
+                          </option>
                         ))}
-                      </div>
-                    </div>
+                      </optgroup>
+                      <optgroup label="uds/obd_catalog.yaml identification">
+                        {defs.identification.map((d) => (
+                          <option key={d.did} value={`0x${d.did.toString(16).toUpperCase()}`}>
+                            0x{d.did.toString(16).toUpperCase()} {d.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </label>
+                )}
+                <label className="flex flex-col gap-1">
+                  <span className="text-slate-400 text-[11px]">Further bytes (hex), e.g. the DTC status mask for 0x19 0x02</span>
+                  <input value={extraText} onChange={(e) => setExtraText(e.target.value)} placeholder="0C" className="bg-background border border-surface-border rounded px-2 py-1.5 text-slate-200" />
+                </label>
+                <div className="text-[11px]">
+                  {composed === null ? (
+                    <span className="text-rose-300">Bytes are not valid hex.</span>
+                  ) : composed.valid ? (
+                    <span className="text-slate-300">
+                      Single Frame on {hexId(addr.requestId, addr.extended)}: <span className="text-cyan-300">{hexBytes(composed.canFrameData)}</span>
+                    </span>
+                  ) : (
+                    <span className="text-rose-300">{composed.errorMessage}</span>
                   )}
+                </div>
+                <button
+                  onClick={send}
+                  disabled={!canTransmit || !composed?.valid}
+                  className="flex items-center justify-center gap-2 py-2 rounded font-semibold bg-purple-600 hover:bg-purple-500 text-slate-950 disabled:bg-slate-800 disabled:text-slate-500"
+                >
+                  {canTransmit ? <Send className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+                  {canTransmit ? 'Send to simulated ECU' : 'Only with the running virtual bus'}
+                </button>
+              </div>
+              {composerLog.map((l, i) => (
+                <div key={i} className="text-[10px] text-slate-400">
+                  {l}
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* Right Side: ISO-TP Packet Ladder Sequence Diagram & Communication Log */}
-        <div className="w-full md:w-1/2 p-4 flex flex-col gap-4 overflow-hidden">
-          {/* ISO-TP Ladder Card */}
-          <div className="bg-surface/60 border border-surface-border rounded-lg p-3.5 flex flex-col gap-3">
-            <div className="flex items-center justify-between border-b border-surface-border pb-2">
-              <div className="flex items-center gap-2">
+        <div className="w-full lg:w-2/5 p-3 flex flex-col gap-3 overflow-auto">
+          <div className="bg-surface/60 border border-surface-border rounded p-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between border-b border-surface-border pb-1.5">
+              <span className="flex items-center gap-2 text-slate-200 font-semibold">
                 <Layers className="w-4 h-4 text-purple-400" />
-                <span className="text-slate-200 font-semibold text-xs">ISO 15765-2 Packet Ladder Diagram</span>
-              </div>
-              <span className="text-[10px] bg-purple-950/40 text-purple-300 border border-purple-800 px-2 py-0.5 rounded font-mono">
-                {ladderSteps.length} Frames
+                ISO-TP ladder
               </span>
+              <span className="text-[10px] text-slate-500">{selected ? `${selected.frames.length} frames on the bus` : ''}</span>
             </div>
-
-            {/* Sequence Ladder Rails */}
-            <div className="flex items-center justify-between px-6 text-[11px] font-semibold text-slate-400 border-b border-surface-border/40 pb-1">
-              <span className="text-cyan-400">TESTER CLIENT [0x18DAF110]</span>
-              <span className="text-emerald-400">CL250 ECU [0x18DA10F1]</span>
-            </div>
-
-            {/* Steps Container */}
-            <div className="flex flex-col gap-2 max-h-56 overflow-y-auto px-1 py-1">
-              {ladderSteps.map((step) => {
-                const isTesterToEcu = step.direction === 'tester_to_ecu';
-                return (
-                  <div
-                    key={step.stepIndex}
-                    className="flex items-center justify-between gap-3 text-[11px] bg-background/60 p-2 rounded border border-surface-border/70 hover:border-slate-500 transition-colors"
-                  >
-                    {/* Step number badge */}
-                    <span className="text-[10px] text-slate-500 font-bold w-4">#{step.stepIndex}</span>
-
-                    {/* Arrow & Payload display */}
-                    <div className="flex-1 flex items-center justify-between gap-2">
-                      {isTesterToEcu ? (
-                        <>
-                          <div className="flex flex-col">
-                            <span className="font-bold text-cyan-300">{step.frameType}</span>
-                            <span className="text-[9px] text-slate-400">{step.pciDesc}</span>
-                          </div>
-                          <div className="flex items-center gap-1 text-cyan-400 flex-1 justify-center">
-                            <span className="h-[1px] bg-cyan-500/60 flex-1"></span>
-                            <span className="font-mono text-[10px] bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800 text-cyan-200">
-                              {step.dataHex}
-                            </span>
-                            <ArrowRight className="w-3.5 h-3.5" />
-                          </div>
-                          <div className="w-12 text-right text-[10px] text-slate-500">ECU</div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="w-12 text-left text-[10px] text-slate-500">Tester</div>
-                          <div className="flex items-center gap-1 text-emerald-400 flex-1 justify-center">
-                            <ArrowLeft className="w-3.5 h-3.5" />
-                            <span className="font-mono text-[10px] bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800 text-emerald-200">
-                              {step.dataHex}
-                            </span>
-                            <span className="h-[1px] bg-emerald-500/60 flex-1"></span>
-                          </div>
-                          <div className="flex flex-col text-right">
-                            <span className="font-bold text-emerald-300">{step.frameType}</span>
-                            <span className="text-[9px] text-slate-400">{step.pciDesc}</span>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Reassembly Completion Banner */}
-            {ladderSteps.length > 0 && (
-              <div className="bg-surface-elevated/70 border border-surface-border rounded p-2 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span className="text-slate-300 font-semibold">ISO-TP Reassembly Status:</span>
+            {!selected ? (
+              <div className="text-slate-500 py-6 text-center">Select a transaction.</div>
+            ) : (
+              <>
+                <div className="flex justify-between text-[10px] text-slate-400 px-1">
+                  <span className="text-cyan-400">tester {hexId(addr.requestId, addr.extended)}</span>
+                  <span className="text-emerald-400">ECU {hexId(addr.responseId, addr.extended)}</span>
                 </div>
-                <span className="text-emerald-300 font-bold font-mono">100% COMPLETE</span>
-              </div>
+                {selected.frames.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2 text-[11px] bg-background/60 p-1.5 rounded border border-surface-border/60">
+                    <span className="text-slate-500 w-16">+{((f.t - selected.tStart) * 1000).toFixed(1)} ms</span>
+                    <span className={`w-6 font-bold ${f.dir === 'req' ? 'text-cyan-300' : 'text-emerald-300'}`}>{f.pci}</span>
+                    {f.dir === 'req' ? <ArrowRight className="w-3.5 h-3.5 text-cyan-400" /> : <ArrowLeft className="w-3.5 h-3.5 text-emerald-400" />}
+                    <span className={f.dir === 'req' ? 'text-cyan-200' : 'text-emerald-200'}>{hexBytes(f.data)}</span>
+                  </div>
+                ))}
+                <div className="flex flex-col gap-1 text-[11px] border-t border-surface-border pt-2">
+                  <div>
+                    <span className="text-slate-400">request </span>
+                    <span className="text-cyan-200">{hexBytes(selected.request)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">response </span>
+                    <span className="text-emerald-200">{selected.response ? hexBytes(selected.response) : '–'}</span>
+                  </div>
+                  <div className="text-slate-200">{selected.summary}</div>
+                  {!selected.policy.allowed && <div className="text-rose-300">Outside tester_policy: {selected.policy.reason}</div>}
+                  {selected.tEnd !== undefined && selected.status !== 'suppressed' && (
+                    <div className="text-slate-500">round trip {((selected.tEnd - selected.tStart) * 1000).toFixed(1)} ms</div>
+                  )}
+                </div>
+              </>
             )}
           </div>
 
-          {/* Diagnostic Communication Terminal Log */}
-          <div className="flex-1 bg-surface/40 border border-surface-border rounded-lg p-3 flex flex-col gap-2 overflow-hidden">
-            <div className="flex items-center justify-between border-b border-surface-border pb-1.5">
-              <div className="flex items-center gap-1.5 text-slate-400 font-semibold text-[11px]">
-                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Diagnostic Transaction Log</span>
-              </div>
-              <span className="text-[10px] text-slate-500 font-mono">Filtered 0x18DAF110</span>
-            </div>
-
-            <div className="flex-1 overflow-y-auto flex flex-col gap-1.5 text-[11px] font-mono">
-              {udsLogs.map((log, idx) => (
-                <div
-                  key={idx}
-                  className={`p-2 rounded border ${
-                    log.type === 'req'
-                      ? 'bg-cyan-950/20 border-cyan-500/20 text-cyan-300'
-                      : 'bg-emerald-950/20 border-emerald-500/20 text-emerald-300'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 mb-0.5">
-                    <span>
-                      {log.timestamp} • {log.type.toUpperCase()}
-                    </span>
-                    <span className="font-semibold">{log.service}</span>
-                  </div>
-                  <div className="font-bold">{log.dataHex}</div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">{log.decodedDesc}</div>
-                </div>
-              ))}
-            </div>
+          <div className="bg-surface/40 border border-surface-border rounded p-3 text-[11px] text-slate-400 flex flex-col gap-1">
+            <span className="flex items-center gap-1.5 text-slate-300 font-semibold">
+              <Terminal className="w-3.5 h-3.5 text-cyan-400" /> tester_policy
+            </span>
+            {defs.vehicle.testerPolicy.allowed.map((a) => (
+              <span key={a.sid}>
+                0x{hex2(a.sid)} {defs.iso.services.get(a.sid) ?? a.name}
+                {a.subfunctions ? ` [${a.subfunctions.map((s) => `0x${hex2(s)}`).join(', ')}]` : ''}
+              </span>
+            ))}
+            <span className="text-rose-300/80">forbidden: {defs.vehicle.testerPolicy.forbidden.map((s) => `0x${hex2(s)}`).join(' ')}</span>
           </div>
         </div>
       </div>

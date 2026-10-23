@@ -1,180 +1,242 @@
-import { DbcMessageDef, DbcSignalDef } from '../types/can';
+import { DbcCatalog, DbcMessageDef, DbcSignalDef } from '../types/can';
 
 /**
- * Built-in platform DBC catalog preloaded from moto-vehicle-defs
- * (platform.dbc & cl250.dbc)
+ * In-browser DBC parser: VERSION, BU_, BO_, SG_, CM_ (BU_/BO_/SG_), BA_DEF_DEF_ / BA_
+ * (GenMsgCycleTime, E2E_Protected, E2E_DataID, NodeId) and VAL_.
+ * The analyzer has no built-in catalog: signals come only from a DBC (Invariant 2),
+ * normally the pinned moto-vehicle-defs copy (src/defs).
  */
-export const DEFAULT_MOTO_MESSAGES: DbcMessageDef[] = [
-  {
-    id: 0x020,
-    name: 'EngineAndVehicleSpeed',
-    dlc: 8,
-    sender: 'ECU',
-    signals: [
-      { name: 'EngineSpeed', startBit: 0, bitLength: 16, isLittleEndian: true, isSigned: false, factor: 0.25, offset: 0, min: 0, max: 15000, unit: 'rpm' },
-      { name: 'VehicleSpeed', startBit: 16, bitLength: 16, isLittleEndian: true, isSigned: false, factor: 0.01, offset: 0, min: 0, max: 250, unit: 'km/h' },
-      { name: 'ThrottlePosition', startBit: 32, bitLength: 8, isLittleEndian: true, isSigned: false, factor: 0.39215686, offset: 0, min: 0, max: 100, unit: '%' },
-      { name: 'GearPosition', startBit: 40, bitLength: 4, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 6, unit: 'gear' },
-      { name: 'EngineCoolantTemp', startBit: 48, bitLength: 8, isLittleEndian: true, isSigned: false, factor: 1, offset: -40, min: -40, max: 150, unit: '°C' },
-    ],
-  },
-  {
-    id: 0x021,
-    name: 'VehicleDynamicsIMU',
-    dlc: 8,
-    sender: 'SAFETY_NODE',
-    signals: [
-      { name: 'LeanAngle', startBit: 0, bitLength: 16, isLittleEndian: true, isSigned: true, factor: 0.01, offset: 0, min: -60, max: 60, unit: 'deg' },
-      { name: 'RollRate', startBit: 16, bitLength: 16, isLittleEndian: true, isSigned: true, factor: 0.02, offset: 0, min: -250, max: 250, unit: 'deg/s' },
-      { name: 'PitchRate', startBit: 32, bitLength: 16, isLittleEndian: true, isSigned: true, factor: 0.02, offset: 0, min: -250, max: 250, unit: 'deg/s' },
-      { name: 'LateralAccel', startBit: 48, bitLength: 16, isLittleEndian: true, isSigned: true, factor: 0.001, offset: 0, min: -4, max: 4, unit: 'g' },
-    ],
-  },
-  {
-    id: 0x110,
-    name: 'WheelSpeedsAndBrakes',
-    dlc: 8,
-    sender: 'ABS',
-    signals: [
-      { name: 'FrontWheelSpeed', startBit: 0, bitLength: 16, isLittleEndian: true, isSigned: false, factor: 0.01, offset: 0, min: 0, max: 250, unit: 'km/h' },
-      { name: 'RearWheelSpeed', startBit: 16, bitLength: 16, isLittleEndian: true, isSigned: false, factor: 0.01, offset: 0, min: 0, max: 250, unit: 'km/h' },
-      { name: 'FrontBrakeActive', startBit: 32, bitLength: 1, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 1, unit: 'bool' },
-      { name: 'RearBrakeActive', startBit: 33, bitLength: 1, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 1, unit: 'bool' },
-      { name: 'AbsIntervention', startBit: 34, bitLength: 1, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 1, unit: 'bool' },
-    ],
-  },
-  {
-    id: 0x081,
-    name: 'HeartbeatRtCore',
-    dlc: 4,
-    sender: 'RT_CORE',
-    signals: [
-      { name: 'AliveCounter', startBit: 0, bitLength: 8, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 255, unit: 'cnt' },
-      { name: 'NodeState', startBit: 8, bitLength: 8, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 15, unit: 'enum' },
-      { name: 'FaultMask', startBit: 16, bitLength: 16, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 65535, unit: 'mask' },
-    ],
-  },
-  {
-    id: 0x082,
-    name: 'HeartbeatSafetyNode',
-    dlc: 4,
-    sender: 'SAFETY_NODE',
-    signals: [
-      { name: 'AliveCounter', startBit: 0, bitLength: 8, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 255, unit: 'cnt' },
-      { name: 'SafetyState', startBit: 8, bitLength: 8, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 15, unit: 'enum' },
-      { name: 'ImmobilizerLocked', startBit: 16, bitLength: 1, isLittleEndian: true, isSigned: false, factor: 1, offset: 0, min: 0, max: 1, unit: 'bool' },
-    ],
-  },
-];
-
-/**
- * In-browser DBC parser supporting BO_ (Messages) and SG_ (Signals)
- */
-export function parseDbcText(dbcText: string): DbcMessageDef[] {
-  const lines = dbcText.split('\n');
+export function parseDbc(dbcText: string): DbcCatalog {
+  const text = dbcText.replace(/\r\n/g, '\n');
+  const lines = text.split('\n');
   const messages: DbcMessageDef[] = [];
+  const nodes: DbcCatalog['nodes'] = [];
+  let version = '';
   let currentMsg: DbcMessageDef | null = null;
 
-  // Regex patterns
-  // BO_ 32 EngineStatus: 8 ECU
-  const boRegex = /^BO_\s+(\d+)\s+([a-zA-Z0-9_]+)\s*:\s*(\d+)\s+([a-zA-Z0-9_]+)/;
-  // SG_ EngineSpeed : 0|16@1+ (0.25,0) [0|15000] "rpm" Vector__XXX
-  const sgRegex = /^\s*SG_\s+([a-zA-Z0-9_]+)\s*(?:m\d+)?\s*:\s*(\d+)\|(\d+)@([01])([+-])\s*\(([^,]+),([^)]+)\)\s*\[([^|]+)\|([^\]]+)\]\s*"([^"]*)"/;
+  // BO_ 32 EkfLean: 8 RT_CORE
+  const boRegex = /^BO_\s+(\d+)\s+([A-Za-z0-9_]+)\s*:\s*(\d+)\s+([A-Za-z0-9_]+)/;
+  // SG_ NAME [M|m0] : start|len@order sign (factor,offset) [min|max] "unit" receivers
+  const sgRegex =
+    /^SG_\s+([A-Za-z0-9_]+)\s*(?:M|m\d+M?)?\s*:\s*(\d+)\|(\d+)@([01])([+-])\s*\(([^,]+),([^)]+)\)\s*\[([^|]+)\|([^\]]+)\]\s*"([^"]*)"\s*(.*)$/;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
+    if (line === '') {
+      currentMsg = null;
+      continue;
+    }
 
-    const boMatch = line.match(boRegex);
+    const ver = /^VERSION\s+"([^"]*)"/.exec(line);
+    if (ver) {
+      version = ver[1];
+      continue;
+    }
+
+    const bu = /^BU_\s*:\s*(.*)$/.exec(line);
+    if (bu) {
+      bu[1].split(/\s+/).filter(Boolean).forEach((name) => nodes.push({ name }));
+      continue;
+    }
+
+    const boMatch = boRegex.exec(line);
     if (boMatch) {
+      const rawId = Number(boMatch[1]);
+      // DBC marks a 29-bit identifier with bit 31 set.
+      const isExtended = rawId >= 0x80000000;
       currentMsg = {
-        id: parseInt(boMatch[1], 10),
+        id: isExtended ? rawId - 0x80000000 : rawId,
         name: boMatch[2],
         dlc: parseInt(boMatch[3], 10),
         sender: boMatch[4],
         signals: [],
+        isExtended,
       };
       messages.push(currentMsg);
       continue;
     }
 
     if (currentMsg) {
-      const sgMatch = line.match(sgRegex);
-      if (sgMatch) {
-        const signal: DbcSignalDef = {
-          name: sgMatch[1],
-          startBit: parseInt(sgMatch[2], 10),
-          bitLength: parseInt(sgMatch[3], 10),
-          isLittleEndian: sgMatch[4] === '1',
-          isSigned: sgMatch[5] === '-',
-          factor: parseFloat(sgMatch[6]),
-          offset: parseFloat(sgMatch[7]),
-          min: parseFloat(sgMatch[8]),
-          max: parseFloat(sgMatch[9]),
-          unit: sgMatch[10],
-        };
-        currentMsg.signals.push(signal);
+      const sg = sgRegex.exec(line);
+      if (sg) {
+        currentMsg.signals.push({
+          name: sg[1],
+          startBit: parseInt(sg[2], 10),
+          bitLength: parseInt(sg[3], 10),
+          isLittleEndian: sg[4] === '1',
+          isSigned: sg[5] === '-',
+          factor: parseFloat(sg[6]),
+          offset: parseFloat(sg[7]),
+          min: parseFloat(sg[8]),
+          max: parseFloat(sg[9]),
+          unit: sg[10],
+          receivers: sg[11].split(',').map((r) => r.trim()).filter((r) => r && r !== 'Vector__XXX'),
+        });
       }
     }
   }
 
-  return messages.length > 0 ? messages : DEFAULT_MOTO_MESSAGES;
+  const byRawId = new Map<number, DbcMessageDef>();
+  messages.forEach((m) => byRawId.set(m.isExtended ? m.id + 0x80000000 : m.id, m));
+
+  // Comments (may span lines; DBC strings escape quotes as \").
+  const str = '"((?:[^"\\\\]|\\\\.)*)"';
+  for (const m of text.matchAll(new RegExp(`CM_\\s+BO_\\s+(\\d+)\\s+${str}\\s*;`, 'g'))) {
+    const msg = byRawId.get(Number(m[1]));
+    if (msg) msg.comment = m[2];
+  }
+  for (const m of text.matchAll(new RegExp(`CM_\\s+SG_\\s+(\\d+)\\s+([A-Za-z0-9_]+)\\s+${str}\\s*;`, 'g'))) {
+    const sig = byRawId.get(Number(m[1]))?.signals.find((s) => s.name === m[2]);
+    if (sig) sig.comment = m[3];
+  }
+  for (const m of text.matchAll(new RegExp(`CM_\\s+BU_\\s+([A-Za-z0-9_]+)\\s+${str}\\s*;`, 'g'))) {
+    const node = nodes.find((n) => n.name === m[1]);
+    if (node) node.comment = m[2];
+  }
+
+  // Attributes: enum definitions, defaults, then explicit values.
+  const enumDefs = new Map<string, string[]>();
+  for (const m of text.matchAll(/BA_DEF_\s+(?:BO_|BU_|SG_)?\s*"([^"]+)"\s+ENUM\s+([^;]+);/g)) {
+    enumDefs.set(m[1], [...m[2].matchAll(/"([^"]*)"/g)].map((x) => x[1]));
+  }
+  const defaults = new Map<string, string>();
+  for (const m of text.matchAll(/BA_DEF_DEF_\s+"([^"]+)"\s+("?)([^";]*)\2\s*;/g)) defaults.set(m[1], m[3]);
+
+  const msgAttr = new Map<DbcMessageDef, Map<string, string>>();
+  for (const m of text.matchAll(/BA_\s+"([^"]+)"\s+BO_\s+(\d+)\s+("?)([^";]*)\3\s*;/g)) {
+    const msg = byRawId.get(Number(m[2]));
+    if (!msg) continue;
+    if (!msgAttr.has(msg)) msgAttr.set(msg, new Map());
+    msgAttr.get(msg)!.set(m[1], m[4].trim());
+  }
+  for (const m of text.matchAll(/BA_\s+"NodeId"\s+BU_\s+([A-Za-z0-9_]+)\s+(\d+)\s*;/g)) {
+    const node = nodes.find((n) => n.name === m[1]);
+    if (node) node.nodeId = Number(m[2]);
+  }
+
+  const attr = (msg: DbcMessageDef, name: string): string | undefined => msgAttr.get(msg)?.get(name) ?? defaults.get(name);
+  const enumValue = (name: string, v: string | undefined): string | undefined => {
+    if (v === undefined) return undefined;
+    const labels = enumDefs.get(name);
+    if (labels && /^\d+$/.test(v)) return labels[Number(v)];
+    return v;
+  };
+
+  for (const msg of messages) {
+    const cycle = Number(attr(msg, 'GenMsgCycleTime'));
+    if (Number.isFinite(cycle) && cycle > 0) msg.cycleTimeMs = cycle;
+    if (enumValue('E2E_Protected', attr(msg, 'E2E_Protected')) === 'Yes') {
+      const dataId = Number(attr(msg, 'E2E_DataID'));
+      if (Number.isFinite(dataId)) msg.e2e = { dataId };
+    }
+  }
+
+  // Value tables.
+  for (const m of text.matchAll(/VAL_\s+(\d+)\s+([A-Za-z0-9_]+)\s+((?:-?\d+\s+"[^"]*"\s*)+);/g)) {
+    const sig = byRawId.get(Number(m[1]))?.signals.find((s) => s.name === m[2]);
+    if (!sig) continue;
+    const values: Record<number, string> = {};
+    for (const v of m[3].matchAll(/(-?\d+)\s+"([^"]*)"/g)) values[Number(v[1])] = v[2];
+    sig.values = values;
+  }
+
+  return { version, nodes, messages };
+}
+
+/** Messages only (convenience for callers that need no attributes). */
+export function parseDbcText(dbcText: string): DbcMessageDef[] {
+  return parseDbc(dbcText).messages;
 }
 
 /**
- * Decodes raw CAN payload bytes using a message definition
+ * Extracts the raw (unscaled) value of a signal. Works for any length up to 52 bits
+ * without 32-bit overflow (no bitwise operators on the accumulated value).
+ * Returns null when the signal does not fit in the payload.
  */
-export function decodeFrameSignals(
-  data: number[],
-  messageDef?: DbcMessageDef
-): Record<string, number | string> {
-  if (!messageDef || !messageDef.signals || messageDef.signals.length === 0) {
-    return {};
+export function extractRawValue(data: number[], sig: DbcSignalDef): number | null {
+  const len = sig.bitLength;
+  if (len <= 0 || len > 52) return null;
+
+  let raw = 0;
+  for (const bitPos of signalBitPositions(sig)) {
+    const byteIdx = bitPos >> 3;
+    if (byteIdx >= data.length) return null;
+    raw = raw * 2 + ((data[byteIdx] >> (bitPos & 7)) & 1);
   }
 
-  const result: Record<string, number | string> = {};
+  if (sig.isSigned && raw >= 2 ** (len - 1)) raw -= 2 ** len;
+  return raw;
+}
 
-  for (const sig of messageDef.signals) {
-    let rawValue = 0;
-
-    if (sig.isLittleEndian) {
-      // Little-endian bit extraction
-      const startByte = Math.floor(sig.startBit / 8);
-      const startBitInByte = sig.startBit % 8;
-
-      if (startByte >= data.length) continue;
-
-      let bitsLeft = sig.bitLength;
-      let currentByteIdx = startByte;
-      let bitOffsetInResult = 0;
-
-      while (bitsLeft > 0 && currentByteIdx < data.length) {
-        const byteVal = data[currentByteIdx];
-        const bitShift = currentByteIdx === startByte ? startBitInByte : 0;
-        const bitsToTake = Math.min(8 - bitShift, bitsLeft);
-        const mask = (1 << bitsToTake) - 1;
-        const extractedBits = (byteVal >> bitShift) & mask;
-
-        rawValue |= (extractedBits << bitOffsetInResult);
-        bitOffsetInResult += bitsToTake;
-        bitsLeft -= bitsToTake;
-        currentByteIdx++;
-      }
-
-      // Sign extension if signed
-      if (sig.isSigned && (rawValue & (1 << (sig.bitLength - 1)))) {
-        rawValue = rawValue - (1 << sig.bitLength);
-      }
-    } else {
-      // Big-endian extraction (standard single-byte or 16-bit)
-      const startByte = Math.floor(sig.startBit / 8);
-      if (startByte < data.length) {
-        rawValue = data[startByte];
-      }
+/**
+ * Absolute bit positions (byte * 8 + bit) of a signal, most significant first.
+ * Intel: the start bit is the LSB and bits go up. Motorola: the start bit is the MSB in
+ * DBC sawtooth numbering; bits go down a byte, then on at bit 7 of the next byte.
+ */
+export function signalBitPositions(sig: DbcSignalDef): number[] {
+  const out: number[] = [];
+  if (sig.isLittleEndian) {
+    for (let i = sig.bitLength - 1; i >= 0; i--) out.push(sig.startBit + i);
+  } else {
+    let bitPos = sig.startBit;
+    for (let i = 0; i < sig.bitLength; i++) {
+      out.push(bitPos);
+      bitPos = bitPos % 8 === 0 ? bitPos + 15 : bitPos - 1;
     }
-
-    const physicalValue = (rawValue * sig.factor) + sig.offset;
-    result[sig.name] = Number(physicalValue.toFixed(2));
   }
+  return out;
+}
 
+/**
+ * Decodes raw CAN payload bytes using a message definition. Values are full precision;
+ * formatting belongs to the UI.
+ */
+export function decodeFrameSignals(data: number[], messageDef?: DbcMessageDef): Record<string, number | string> {
+  if (!messageDef || messageDef.signals.length === 0) return {};
+  const result: Record<string, number | string> = {};
+  for (const sig of messageDef.signals) {
+    const raw = extractRawValue(data, sig);
+    if (raw === null) continue;
+    result[sig.name] = raw * sig.factor + sig.offset;
+  }
   return result;
+}
+
+/** Physical value -> raw integer of a signal, rounded and saturated to its bit field. */
+export function physicalToRaw(sig: DbcSignalDef, physical: number): number {
+  let raw = Math.round((physical - sig.offset) / sig.factor);
+  const lo = sig.isSigned ? -(2 ** (sig.bitLength - 1)) : 0;
+  const hi = sig.isSigned ? 2 ** (sig.bitLength - 1) - 1 : 2 ** sig.bitLength - 1;
+  if (!Number.isFinite(raw)) raw = 0;
+  return Math.max(lo, Math.min(hi, raw));
+}
+
+/**
+ * Packs signal values into a payload of the message's DLC (used by the simulator and
+ * tests; the analyzer never transmits on a vehicle bus). Values are physical unless
+ * `raw` is set; unknown names are ignored, missing signals stay raw 0.
+ */
+export function encodeFrameSignals(
+  messageDef: DbcMessageDef,
+  values: Record<string, number>,
+  opts: { raw?: boolean } = {}
+): number[] {
+  const data = new Array(messageDef.dlc).fill(0);
+  for (const sig of messageDef.signals) {
+    const v = values[sig.name];
+    if (v === undefined) continue;
+    let raw = opts.raw ? Math.round(v) : physicalToRaw(sig, v);
+    if (raw < 0) raw += 2 ** sig.bitLength; // two's complement
+    const positions = signalBitPositions(sig);
+    for (let i = positions.length - 1; i >= 0; i--) {
+      const bitPos = positions[i];
+      const byteIdx = bitPos >> 3;
+      if (byteIdx >= data.length) continue;
+      const bit = raw % 2;
+      raw = Math.floor(raw / 2);
+      if (bit) data[byteIdx] |= 1 << (bitPos & 7);
+      else data[byteIdx] &= ~(1 << (bitPos & 7));
+    }
+  }
+  return data;
 }

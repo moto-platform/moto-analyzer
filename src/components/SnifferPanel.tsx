@@ -1,27 +1,27 @@
 import React, { useState } from 'react';
 import { Eye, RefreshCw, Info, Waves, LayoutGrid, ArrowRightLeft, Sparkles } from 'lucide-react';
-import { ByteSnifferRecord, ByteActivityStatus } from '../types/can';
+import { ByteActivityStatus } from '../types/can';
+import { CaptureStore } from '../state/captureStore';
+import { frameKey } from '../services/capture';
+import { classifyBit as classifyBitRate, BitClass } from '../services/sniffer';
 
 interface SnifferPanelProps {
-  snifferMap: Map<number, ByteSnifferRecord>;
-  onToggleNotch: (id: number, byteIdx: number) => void;
-  onInvertNotch?: (id: number) => void;
-  onClearNotches: () => void;
+  store: CaptureStore;
 }
 
 type SnifferViewMode = 'heatmap' | 'flow';
 
-export const SnifferPanel: React.FC<SnifferPanelProps> = ({
-  snifferMap,
-  onToggleNotch,
-  onInvertNotch,
-  onClearNotches,
-}) => {
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+export const SnifferPanel: React.FC<SnifferPanelProps> = ({ store }) => {
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<SnifferViewMode>('heatmap');
 
-  const records = Array.from(snifferMap.values()).sort((a, b) => a.id - b.id);
-  const selectedRecord = selectedId !== null ? snifferMap.get(selectedId) : records[0];
+  const snifferMap = store.sniffer;
+  const keyOf = (rec: { id: number; bus: string }) => frameKey(rec.bus, rec.id);
+  const records = Array.from(snifferMap.values()).sort((a, b) => a.bus.localeCompare(b.bus) || a.id - b.id);
+  const selectedRecord = (selectedKey !== null ? snifferMap.get(selectedKey) : undefined) ?? records[0];
+  const onToggleNotch = (key: string, idx: number) => store.toggleNotch(key, idx);
+  const onInvertNotch = (key: string) => store.invertNotch(key);
+  const onClearNotches = () => store.clearNotches();
 
   const getStatusColor = (status: ByteActivityStatus, isNotched: boolean) => {
     if (isNotched) return 'bg-slate-800 text-slate-500 opacity-40 line-through';
@@ -38,11 +38,15 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
     }
   };
 
-  const classifyBit = (flips: number) => {
-    if (flips === 0) return { label: 'STATIC', color: 'text-slate-600 bg-slate-900/60' };
-    if (flips <= 5) return { label: 'SWITCH', color: 'text-emerald-400 bg-emerald-950/40 border-emerald-700' };
-    if (flips <= 40) return { label: 'COUNTER', color: 'text-amber-400 bg-amber-950/40 border-amber-700' };
-    return { label: 'ANALOG', color: 'text-cyan-300 bg-cyan-950/40 border-cyan-700' };
+  const BIT_CLASS_STYLE: Record<BitClass, string> = {
+    STATIC: 'text-slate-600 bg-slate-900/60',
+    RARE: 'text-emerald-400 bg-emerald-950/40 border-emerald-700',
+    ACTIVE: 'text-amber-400 bg-amber-950/40 border-amber-700',
+    FAST: 'text-cyan-300 bg-cyan-950/40 border-cyan-700',
+  };
+  const classifyBit = (flips: number, frames: number) => {
+    const label = classifyBitRate(flips, frames);
+    return { label, color: BIT_CLASS_STYLE[label] };
   };
 
   return (
@@ -90,7 +94,7 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
             </span>
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-              <span className="text-slate-400">Fluctuating</span>
+              <span className="text-slate-400">Reversed direction</span>
             </span>
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-slate-600" />
@@ -101,9 +105,9 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
 
         {/* Notch & Action Controls */}
         <div className="flex items-center gap-2">
-          {selectedRecord && onInvertNotch && (
+          {selectedRecord && (
             <button
-              onClick={() => onInvertNotch(selectedRecord.id)}
+              onClick={() => onInvertNotch(keyOf(selectedRecord))}
               className="flex items-center gap-1 px-2.5 py-1 rounded bg-surface-elevated hover:bg-slate-700 text-cyan-300 border border-surface-border text-xs transition-colors"
               title="Invert notched bytes for selected ID"
             >
@@ -150,15 +154,18 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
                 ) : (
                   records.map((rec) => (
                     <tr
-                      key={rec.id}
-                      onClick={() => setSelectedId(rec.id)}
+                      key={keyOf(rec)}
+                      onClick={() => setSelectedKey(keyOf(rec))}
                       className={`cursor-pointer transition-colors ${
-                        selectedRecord?.id === rec.id
+                        selectedRecord && keyOf(selectedRecord) === keyOf(rec)
                           ? 'bg-cyan-950/30 border-l-2 border-cyan-400'
                           : 'hover:bg-surface-elevated/40'
                       }`}
                     >
-                      <td className="py-2 px-3 font-bold text-cyan-400">{rec.idHex}</td>
+                      <td className="py-2 px-3 font-bold text-cyan-400">
+                        {rec.idHex}
+                        <span className="block text-[9px] font-normal text-slate-500">{rec.bus}</span>
+                      </td>
                       <td className="py-2 px-3 text-slate-300 font-medium truncate max-w-[160px]">
                         {rec.name || '-'}
                       </td>
@@ -172,7 +179,7 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                onToggleNotch(rec.id, bIdx);
+                                onToggleNotch(keyOf(rec), bIdx);
                               }}
                               className={`w-7 h-6 rounded font-mono text-[11px] border transition-all ${getStatusColor(
                                 status,
@@ -189,7 +196,7 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            setSelectedId(rec.id);
+                            setSelectedKey(keyOf(rec));
                           }}
                           className="p-1 rounded bg-surface hover:bg-surface-elevated text-slate-400 hover:text-cyan-300 border border-surface-border"
                           title="Inspect 64-bit Layout & Waterfall"
@@ -292,18 +299,18 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
               <div className="grid grid-cols-2 gap-1.5 text-[10px]">
                 <div className="p-1 rounded bg-cyan-950/30 border border-cyan-800 text-cyan-300 flex items-center gap-1">
                   <Sparkles className="w-3 h-3" />
-                  <span>Analog (&gt;40 flips)</span>
+                  <span>Fast (≥45 % of frames)</span>
                 </div>
                 <div className="p-1 rounded bg-amber-950/30 border border-amber-800 text-amber-300 flex items-center gap-1">
                   <Sparkles className="w-3 h-3" />
-                  <span>Counter (5-40 flips)</span>
+                  <span>Active (5–45 %)</span>
                 </div>
                 <div className="p-1 rounded bg-emerald-950/30 border border-emerald-800 text-emerald-300 flex items-center gap-1">
                   <Sparkles className="w-3 h-3" />
-                  <span>Switch (1-5 flips)</span>
+                  <span>Rare (&lt;5 %)</span>
                 </div>
                 <div className="p-1 rounded bg-slate-900 border border-surface-border text-slate-500 flex items-center gap-1">
-                  <span>Static (0 flips)</span>
+                  <span>Static (never)</span>
                 </div>
               </div>
 
@@ -326,7 +333,7 @@ export const SnifferPanel: React.FC<SnifferPanelProps> = ({
                         const isSet = (byte & (1 << bitPos)) !== 0;
                         const globalBitIdx = bIdx * 8 + bitIdx;
                         const flips = selectedRecord.bitFlips ? selectedRecord.bitFlips[globalBitIdx] || 0 : 0;
-                        const classification = classifyBit(flips);
+                        const classification = classifyBit(flips, selectedRecord.framesCompared);
 
                         return (
                           <div

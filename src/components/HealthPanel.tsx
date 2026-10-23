@@ -1,274 +1,181 @@
 import React from 'react';
-import { 
-  HeartPulse, 
-  AlertTriangle, 
-  CheckCircle2, 
-  Zap, 
-  Thermometer, 
-  Disc, 
-  Compass,
-  Gauge
-} from 'lucide-react';
-import { BusStats } from '../types/can';
+import { HeartPulse, Info, ShieldCheck, Activity, CircleDot } from 'lucide-react';
+import { CaptureStore } from '../state/captureStore';
+import { evaluateWindow, WindowState } from '../services/windows';
+import { isE2EValid } from '../services/e2e';
+import { formatSignal, formatValue } from '../services/format';
+import { frameKey } from '../services/capture';
 
 interface HealthPanelProps {
-  stats: BusStats;
-  currentRpm: number;
-  currentSpeed: number;
-  currentLeanAngle: number;
-  currentCoolantTemp: number;
-  gear: number;
-  throttlePct: number;
-  frontWheelSpeed: number;
-  rearWheelSpeed: number;
-  absActive: boolean;
-  rtCoreAlive: number;
-  safetyNodeAlive: number;
+  store: CaptureStore;
 }
 
-export const HealthPanel: React.FC<HealthPanelProps> = ({
-  stats,
-  currentRpm,
-  currentSpeed,
-  currentLeanAngle,
-  currentCoolantTemp,
-  gear,
-  throttlePct,
-  frontWheelSpeed,
-  rearWheelSpeed,
-  absActive,
-  rtCoreAlive,
-  safetyNodeAlive,
-}) => {
-  // Wheel slip calculation
-  const wheelSpeedDiff = Math.abs(frontWheelSpeed - rearWheelSpeed);
-  const slipDetected = wheelSpeedDiff > 4.0 && currentSpeed > 15;
+const holdTone = (h: boolean | null) => (h === null ? 'text-slate-500' : h ? 'text-emerald-300' : 'text-slate-400');
+const holdText = (h: boolean | null) => (h === null ? 'n/a' : h ? 'holds' : 'no');
 
-  // Window health calculations
-  const w1Status = currentRpm > 9200 ? 'warning' : 'ok';
-  const w2Status = Math.abs(currentLeanAngle) > 48 ? 'warning' : 'ok';
-  const w3Status = absActive || slipDetected ? 'warning' : 'ok';
-  const w4Status = stats.busLoadPct > 65 ? 'warning' : 'ok';
-  const w5Status = currentCoolantTemp > 100 ? 'warning' : 'ok';
+const WindowCard: React.FC<{ s: WindowState }> = ({ s }) => {
+  const w = s.def;
+  const isCondition = w.opensOn === 'condition';
+  const eventOnly = w.conditions.length === 0 && w.stable.length === 0;
+  const badge = eventOnly
+    ? { text: `EVENT: ${w.opensOn.toUpperCase()}`, tone: 'bg-slate-900 text-slate-400 border-slate-700' }
+    : isCondition && s.qualified
+    ? { text: 'ENTRY MET', tone: 'bg-emerald-950/50 text-emerald-300 border-emerald-700' }
+    : s.conditionsHold === true
+    ? { text: isCondition ? `HOLDING ${s.heldForSec.toFixed(1)} s` : `HOLDS · NEEDS ${w.opensOn.toUpperCase()}`, tone: 'bg-amber-950/40 text-amber-300 border-amber-700' }
+    : s.conditionsHold === null
+    ? { text: 'NOT OBSERVABLE', tone: 'bg-slate-900 text-slate-400 border-slate-700' }
+    : { text: 'NOT MET', tone: 'bg-slate-900 text-slate-400 border-slate-700' };
 
-  // Overall health score computation
-  const warnings = [w1Status, w2Status, w3Status, w4Status, w5Status].filter((s) => s === 'warning').length;
-  const healthScore = Math.max(70, 100 - warnings * 8);
+  return (
+    <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-2.5">
+      <div className="flex items-start justify-between gap-2 border-b border-surface-border pb-2">
+        <div>
+          <div className="font-bold text-slate-100">{w.key}</div>
+          <div className="text-[10px] text-slate-400">
+            {w.record}
+            {w.recordDid !== undefined && ` · 0x${w.recordDid.toString(16).toUpperCase()}`}
+          </div>
+        </div>
+        <span className={`text-[10px] px-2 py-0.5 rounded border font-semibold whitespace-nowrap ${badge.tone}`}>{badge.text}</span>
+      </div>
+      <p className="text-[11px] text-slate-300 leading-relaxed">{w.description}</p>
+      <div className="text-[10px] text-slate-400">
+        opens on <span className="text-cyan-300">{w.opensOn}</span> · {w.minDurationMs / 1000}–{w.maxDurationMs / 1000} s
+      </div>
+
+      <div className="flex flex-col gap-1 text-[11px]">
+        {s.conditions.length === 0 && <span className="text-slate-500">No condition: opened by the {w.opensOn} event alone.</span>}
+        {s.conditions.map((c, i) => (
+          <div key={i} className="grid grid-cols-[1fr_auto_auto] gap-2 items-baseline">
+            <span className="text-slate-300 truncate" title={c.input.note}>
+              {c.text}
+              {c.input.note && <span className="text-[9px] text-slate-500"> ({c.input.note})</span>}
+            </span>
+            <span className="text-cyan-200">{formatValue(c.value)}</span>
+            <span className={`${holdTone(c.holds)} w-12 text-right`}>{holdText(c.holds)}</span>
+          </div>
+        ))}
+        {s.stable.map((st, i) => (
+          <div key={`s${i}`} className="grid grid-cols-[1fr_auto_auto] gap-2 items-baseline">
+            <span className="text-slate-300 truncate">
+              {st.input.label} spread ≤ {st.maxSpread} over {w.minDurationMs / 1000} s
+            </span>
+            <span className="text-cyan-200">{formatValue(st.spread)}</span>
+            <span className={`${holdTone(st.holds)} w-12 text-right`}>{holdText(st.holds)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export const HealthPanel: React.FC<HealthPanelProps> = ({ store }) => {
+  const defs = store.defs;
+  const now = store.lastTime;
+  const windows = defs.windows.map((w) => evaluateWindow(defs, w, store.history, now));
+  const e2e = store.pipeline.getE2EStats();
+  const heartbeats = store.pipeline
+    .catalog('platform')
+    .filter((m) => m.signals.some((s) => s.name === 'NODE_MODE'))
+    .map((m) => ({ msg: m, frame: store.framesByKey.get(frameKey('platform', m.id)) }));
 
   return (
     <div className="flex flex-col h-full bg-background font-mono text-xs select-none overflow-auto p-4 gap-4">
-      {/* Top Health Header Banner */}
-      <div className="bg-surface/80 border border-surface-border rounded-lg p-4 flex flex-col md:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-lg bg-emerald-950/40 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-            <HeartPulse className="w-6 h-6 animate-pulse" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-base text-slate-100">D-079 Vehicle Health Windows (W1–W5)</span>
-              <span className="text-[10px] bg-cyan-950/40 text-cyan-400 px-2 py-0.5 rounded border border-cyan-800">
-                CL250 Diagnostic Baseline
-              </span>
-            </div>
-            <div className="text-slate-400 text-xs mt-0.5">
-              Real-time platform subsystem integrity monitoring and anomaly detection
-            </div>
-          </div>
+      <div className="bg-surface/80 border border-surface-border rounded-lg p-4 flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <HeartPulse className="w-5 h-5 text-rose-400" />
+          <span className="font-bold text-base text-slate-100">D-079 health windows W1–W5</span>
+          <span className="text-[10px] bg-amber-950/40 text-amber-300 px-2 py-0.5 rounded border border-amber-800">provisional values</span>
         </div>
-
-        {/* Global Health Score */}
-        <div className="flex items-center gap-4 bg-background border border-surface-border rounded-lg px-4 py-2">
-          <div className="flex flex-col items-end">
-            <span className="text-[10px] text-slate-400 uppercase">Platform Integrity</span>
-            <span className="text-xl font-bold text-emerald-400">{healthScore}%</span>
-          </div>
-          <div className="h-8 w-px bg-surface-border" />
-          <div className="flex items-center gap-2 text-xs">
-            {warnings === 0 ? (
-              <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">
-                <CheckCircle2 className="w-4 h-4" />
-                <span>ALL SUBSYSTEMS NOMINAL</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 text-amber-400 font-semibold">
-                <AlertTriangle className="w-4 h-4" />
-                <span>{warnings} ATTENTION REQUIRED</span>
-              </div>
-            )}
-          </div>
-        </div>
+        <p className="text-slate-400 text-[11px] leading-relaxed flex gap-2">
+          <Info className="w-4 h-4 shrink-0 text-cyan-400" />
+          Window records are computed on rt-core and read as ride-summary DIDs. This page shows each window's entry condition from
+          derived/cl250_derived.yaml against the inputs the analyzer can observe; it does not compute the records.
+        </p>
       </div>
 
-      {/* Grid of 5 Health Windows */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* W1: Engine & Powertrain Health */}
-        <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between border-b border-surface-border pb-2">
-            <div className="flex items-center gap-2">
-              <Gauge className="w-4 h-4 text-cyan-400" />
-              <span className="font-bold text-slate-200">W1: Engine & Powertrain</span>
-            </div>
-            <span className="text-[10px] font-mono text-slate-400">0xFD4A</span>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {windows.map((s) => (
+          <WindowCard key={s.def.key} s={s} />
+        ))}
+      </div>
 
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Engine Speed:</span>
-              <span className={`font-bold text-sm ${currentRpm > 9000 ? 'text-rose-400' : 'text-slate-200'}`}>
-                {currentRpm.toFixed(0)} <span className="text-[10px] text-slate-500 font-normal">rpm</span>
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Throttle Valve:</span>
-              <span className="text-slate-200 font-semibold">{throttlePct.toFixed(1)}%</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Selected Gear:</span>
-              <span className="text-cyan-300 font-bold">Gear {gear}</span>
-            </div>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-2">
+          <div className="flex items-center gap-2 font-semibold text-slate-200 border-b border-surface-border pb-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-400" /> E2E supervisor (platform bus)
           </div>
-
-          <div className="mt-auto pt-2 border-t border-surface-border/50 flex items-center justify-between text-[11px]">
-            <span className="text-slate-400">Redline Safety:</span>
-            <span className={w1Status === 'ok' ? 'text-emerald-400 font-semibold' : 'text-amber-400 font-bold'}>
-              {w1Status === 'ok' ? 'Safe Operating Range' : 'Near Rev Limit'}
-            </span>
-          </div>
+          {e2e.length === 0 ? (
+            <span className="text-slate-500">No E2E-protected message seen.</span>
+          ) : (
+            <table className="w-full text-left text-[11px]">
+              <thead className="text-slate-400 text-[10px]">
+                <tr>
+                  <th className="py-1">MESSAGE</th>
+                  <th className="py-1">STATUS</th>
+                  <th className="py-1 text-right">OK</th>
+                  <th className="py-1 text-right">CRC</th>
+                  <th className="py-1 text-right">SEQ</th>
+                  <th className="py-1 text-right">REP</th>
+                  <th className="py-1 text-right">TIMEOUT</th>
+                </tr>
+              </thead>
+              <tbody>
+                {e2e.map((m) => (
+                  <tr key={m.id} className="border-t border-surface-border/40">
+                    <td className="py-1 text-slate-200">
+                      0x{m.id.toString(16).toUpperCase().padStart(3, '0')} {m.name}
+                    </td>
+                    <td className={`py-1 ${isE2EValid(m.status) ? 'text-emerald-300' : 'text-rose-300'}`}>{m.status}</td>
+                    <td className="py-1 text-right text-slate-300">{m.counts.OK ?? 0}</td>
+                    <td className="py-1 text-right text-rose-300">{m.counts.WRONG_CRC ?? 0}</td>
+                    <td className="py-1 text-right text-rose-300">{m.counts.WRONG_SEQUENCE ?? 0}</td>
+                    <td className="py-1 text-right text-amber-300">{m.counts.REPEATED ?? 0}</td>
+                    <td className="py-1 text-right text-amber-300">{m.counts.NO_NEW_DATA ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <span className="text-[10px] text-slate-500">CRC-8/SAE-J1850 over DataID + payload, counter step 1, timeout 3 × cycle time (docs/e2e-profile.md).</span>
         </div>
 
-        {/* W2: Cornering & IMU Dynamics */}
-        <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between border-b border-surface-border pb-2">
-            <div className="flex items-center gap-2">
-              <Compass className="w-4 h-4 text-amber-400" />
-              <span className="font-bold text-slate-200">W2: Cornering & IMU</span>
-            </div>
-            <span className="text-[10px] font-mono text-slate-400">0xFD4B</span>
+        <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-2">
+          <div className="flex items-center gap-2 font-semibold text-slate-200 border-b border-surface-border pb-2">
+            <Activity className="w-4 h-4 text-cyan-400" /> Node heartbeats and bus load
           </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Lean Angle:</span>
-              <span className={`font-bold text-sm ${Math.abs(currentLeanAngle) > 45 ? 'text-amber-400' : 'text-slate-200'}`}>
-                {currentLeanAngle.toFixed(1)}°
+          {heartbeats.map(({ msg, frame }) => {
+            const sig = (n: string) => msg.signals.find((s) => s.name === n);
+            const v = frame?.decodedSignals ?? {};
+            const ageMs = frame ? (now - frame.timestamp) * 1000 : null;
+            const late = ageMs !== null && msg.cycleTimeMs ? ageMs > 3 * msg.cycleTimeMs : true;
+            return (
+              <div key={msg.id} className="grid grid-cols-[150px_1fr_auto] gap-2 text-[11px] items-center">
+                <span className="text-slate-200 flex items-center gap-1.5">
+                  <CircleDot className={`w-3 h-3 ${!frame || late ? 'text-rose-400' : 'text-emerald-400'}`} />
+                  {msg.name.replace('Heartbeat', '')}
+                </span>
+                <span className="text-slate-400">
+                  {frame ? (
+                    <>
+                      mode <span className="text-cyan-200">{formatSignal(sig('NODE_MODE'), v.NODE_MODE)}</span> · errors{' '}
+                      <span className="text-cyan-200">{formatValue(v.ERROR_COUNT)}</span> · uptime <span className="text-cyan-200">{formatValue(v.UPTIME)} s</span>
+                    </>
+                  ) : (
+                    'not seen'
+                  )}
+                </span>
+                <span className={`text-right ${late ? 'text-rose-300' : 'text-slate-500'}`}>{ageMs !== null ? `${ageMs.toFixed(0)} ms` : ''}</span>
+              </div>
+            );
+          })}
+          <div className="border-t border-surface-border pt-2 flex flex-wrap gap-4 text-[11px]">
+            {[...store.busLoad.entries()].map(([bus, l]) => (
+              <span key={bus} className="text-slate-400">
+                {bus}: <span className="text-cyan-200">{l.loadPct.toFixed(1)} %</span> (peak {l.peakPct.toFixed(1)} %, {l.framesPerSec.toFixed(0)} fr/s)
               </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">D-065 Clamp Ceiling:</span>
-              <span className="text-slate-400 font-mono">55.0° Max</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">IMU Safety Node Partition:</span>
-              <span className="text-emerald-400 font-semibold">Cortex-M4 Linked</span>
-            </div>
-          </div>
-
-          <div className="mt-auto pt-2 border-t border-surface-border/50 flex items-center justify-between text-[11px]">
-            <span className="text-slate-400">Stability Envelope:</span>
-            <span className={w2Status === 'ok' ? 'text-emerald-400 font-semibold' : 'text-amber-400 font-bold'}>
-              {w2Status === 'ok' ? 'Tire Grip Stable' : 'High Bank Angle'}
-            </span>
-          </div>
-        </div>
-
-        {/* W3: Brake & ABS System Health */}
-        <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between border-b border-surface-border pb-2">
-            <div className="flex items-center gap-2">
-              <Disc className="w-4 h-4 text-rose-400" />
-              <span className="font-bold text-slate-200">W3: Brake & ABS System</span>
-            </div>
-            <span className="text-[10px] font-mono text-slate-400">0xFD4C</span>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Front Wheel Speed:</span>
-              <span className="text-slate-200 font-semibold">{frontWheelSpeed.toFixed(1)} km/h</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Rear Wheel Speed:</span>
-              <span className="text-slate-200 font-semibold">{rearWheelSpeed.toFixed(1)} km/h</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">ABS Intervention:</span>
-              <span className={`font-bold ${absActive ? 'text-amber-400 animate-pulse' : 'text-slate-400'}`}>
-                {absActive ? 'INTERVENING' : 'INACTIVE'}
-              </span>
-            </div>
-          </div>
-
-          <div className="mt-auto pt-2 border-t border-surface-border/50 flex items-center justify-between text-[11px]">
-            <span className="text-slate-400">Wheel Slip Status:</span>
-            <span className={!slipDetected ? 'text-emerald-400 font-semibold' : 'text-amber-400 font-bold'}>
-              {!slipDetected ? 'Optimal Traction' : `Slip Δ ${wheelSpeedDiff.toFixed(1)} km/h`}
-            </span>
-          </div>
-        </div>
-
-        {/* W4: Electrical & CAN Bus Health */}
-        <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between border-b border-surface-border pb-2">
-            <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-sky-400" />
-              <span className="font-bold text-slate-200">W4: Electrical & Bus</span>
-            </div>
-            <span className="text-[10px] font-mono text-slate-400">0xFD4D</span>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Bus Load %:</span>
-              <span className="text-slate-200 font-semibold">{stats.busLoadPct.toFixed(1)}%</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">RT-Core Heartbeat:</span>
-              <span className="text-cyan-300 font-mono">Alive #{rtCoreAlive}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Safety-Node Heartbeat:</span>
-              <span className="text-emerald-300 font-mono">Alive #{safetyNodeAlive}</span>
-            </div>
-          </div>
-
-          <div className="mt-auto pt-2 border-t border-surface-border/50 flex items-center justify-between text-[11px]">
-            <span className="text-slate-400">CAN Controller:</span>
-            <span className="text-emerald-400 font-semibold">Active Error Free</span>
-          </div>
-        </div>
-
-        {/* W5: Thermal & Cooling Health */}
-        <div className="bg-surface/60 border border-surface-border rounded-lg p-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between border-b border-surface-border pb-2">
-            <div className="flex items-center gap-2">
-              <Thermometer className="w-4 h-4 text-purple-400" />
-              <span className="font-bold text-slate-200">W5: Thermal & Cooling</span>
-            </div>
-            <span className="text-[10px] font-mono text-slate-400">0xFD4E</span>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Coolant Temperature:</span>
-              <span className={`font-bold text-sm ${currentCoolantTemp > 98 ? 'text-amber-400' : 'text-slate-200'}`}>
-                {currentCoolantTemp.toFixed(1)}°C
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Thermostat Status:</span>
-              <span className="text-slate-200 font-semibold">{currentCoolantTemp > 82 ? 'Open (Cooling)' : 'Closed'}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Overheat Safety Limit:</span>
-              <span className="text-slate-400 font-mono">105.0°C</span>
-            </div>
-          </div>
-
-          <div className="mt-auto pt-2 border-t border-surface-border/50 flex items-center justify-between text-[11px]">
-            <span className="text-slate-400">Thermal Envelope:</span>
-            <span className={w5Status === 'ok' ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-bold'}>
-              {w5Status === 'ok' ? 'Optimal Operating Temp' : 'High Temperature Warning'}
-            </span>
+            ))}
           </div>
         </div>
       </div>

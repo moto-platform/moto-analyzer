@@ -8,86 +8,50 @@ Benchmarked against automotive OEM and open-source standards: **Vector CANalyzer
 
 ## Features
 
-- **CAN Bus Monitor & Trace:**
-  - **Overwrite Mode (CANalyzer Matrix):** Grouped by CAN ID showing Period (ms), Frequency (Hz), Count, and 8-byte payload with visual change-flash highlighting.
-  - **Scroll Mode (Chronological Log):** High-speed virtualized timeline log with microsecond timestamps and deltas.
-- **SavvyCAN Byte Sniffer & Heatmap:**
-  - Color-coded byte activity heatmap (green: increasing, red: decreasing, yellow: fluctuating, gray: static).
-  - Notch filter to suppress repetitive steady-state frames and isolate mystery signals.
-- **Multi-Channel Signal Oscilloscope:**
-  - 60 FPS Canvas-rendered waveforms with dual measurement cursors (A & B) calculating $\Delta t$ and $\Delta y$.
-  - Integrated signal picker linked to decoded DBC definitions.
-- **UDS Diagnostic Console & DTC Inspector:**
-  - ISO 14229 request/response console (`0x22` ReadDataByIdentifier, `0x19` ReadDTCInformation).
-  - Freeze-frame cards and active DTC status mask inspector.
-- **Local Synchronization & Standalone Operation:**
-  - Syncs directly with local DBC definitions (`platform.dbc`, `cl250.dbc`).
-  - Built-in Virtual CAN Streamer simulating realistic Honda CL250 powertrain and chassis dynamics.
-  - Replay engine supporting Vector `.asc`, `.csv`, and `.json` log formats.
+Every CAN ID, signal, scaling, cycle time, E2E DataID, DID, UDS address and tester rule comes from the pinned [`moto-vehicle-defs`](https://github.com/moto-platform/moto-vehicle-defs) copy in `external/moto-vehicle-defs` (Invariant 2). The analyzer has no built-in signal catalog.
 
----
+- **Trace:** overwrite view per bus and ID (period, frequency, count, changed bytes, E2E status, decoded signals with value-table names) and a chronological log; pause-on-ID trigger; export to Vector ASC, CSV and JSON.
+- **Sniffer:** byte heatmap (up, down, direction reversal, static), notch filter, flow view and bit-flip classes by flip rate.
+- **Oscilloscope:** any platform signal or vehicle DID, dual cursors with per-channel values, host-side math channels (derivative, difference, product, ratio), CSV and PNG export.
+- **UDS observer:** passive decoding of the tester's ISO 14229 conversation on the vehicle bus (ISO-TP reassembly, request/response pairing, DID values with stale state, DTCs with status bits, NRC names), alerts for a request outside `tester_policy` or a functional request (a second tester). The request composer sends only to the simulated ECU.
+- **Health:** the D-079 window entry conditions (W1-W5) evaluated on the observed inputs, the E2E supervisor of the platform bus (CRC-8/SAE-J1850, alive counter, timeout) and node heartbeats.
+- **Sources:** virtual bus (simulated CL250 vehicle bus with the UDS conversation, platform bus with E2E), log replay at recorded timing, moto-server WebSocket stream (`StreamMessageDto`), and USB SLCAN adapters opened listen-only.
 
-## Quick Start
+## Quick start
 
-### Prerequisites
-- Node.js ≥ 18
-- npm ≥ 9
-
-### Installation & Development
+Requires Node.js 18+.
 
 ```bash
-# Install dependencies
+git submodule update --init      # external/moto-vehicle-defs at the pinned tag
 npm install
-
-# Start local Web Host dev server
-npm run dev
-```
-
-Open your browser at `http://localhost:5173`.
-
-### Production Build
-
-```bash
+npm run dev                      # http://localhost:5173
+npm test                         # vitest
 npm run build
-npm run preview
 ```
 
----
+To move to a newer defs tag: `git -C external/moto-vehicle-defs fetch --tags && git -C external/moto-vehicle-defs checkout vX.Y.Z`, run the tests, commit the submodule pointer and record the combination in `moto-workspace/manifest.yaml`.
 
-## Architecture & System Boundaries
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       moto-analyzer                         │
-│             (Web Host / Tauri Cross-Platform)               │
-│                                                             │
-│   ┌─────────────────────────────────────────────────────┐   │
-│   │   Modular Automotive UI Cockpit (Dark Theme)        │   │
-│   │   • Trace (Overwrite / Scroll)                      │   │
-│   │   • SavvyCAN Heatmap & Diff Inspector               │   │
-│   │   • Signal Oscilloscope (uPlot Canvas 60 FPS)       │   │
-│   │   • UDS Diagnostics & DTC Freeze Frames             │   │
-│   └──────────────────────────┬──────────────────────────┘   │
-│                              │                              │
-│   ┌──────────────────────────┴──────────────────────────┐   │
-│   │          Telemetry Engine & Buffer Layer            │   │
-│   │   • High-throughput circular ring buffer            │   │
-│   │   • DBC Decoder & Local File Synchronizer           │   │
-│   │   • Virtual CAN Generator (Honda CL250)             │   │
-│   └──────────────────────────┬──────────────────────────┘   │
-└──────────────────────────────┼──────────────────────────────┘
-                               │
-                ┌──────────────┴──────────────┐
-                ▼                             ▼
-   ┌─────────────────────────┐   ┌─────────────────────────┐
-   │    Local DBC Files      │   │   Live Backend Stream   │
-   │  (platform.dbc / cl250) │   │ (FastAPI /ws/live D-077)│
-   └─────────────────────────┘   └─────────────────────────┘
+external/moto-vehicle-defs ──► src/defs        (DBC + YAML -> typed Defs, bundled at build time)
+sources (virtual bus, log replay, WebSocket, SLCAN)
+        │ raw frames + bus role (vehicle | platform)
+        ▼
+src/services/pipeline.ts   timing per ID, decode with the bus's DBC, E2E check
+src/services/udsMonitor.ts passive UDS observer of the vehicle bus
+        ▼
+src/state/captureStore.ts  frames, 50k-frame log ring, sniffer, Float64Array signal rings;
+                           UI notified at most every 66 ms, however fast frames arrive
+        ▼
+src/components/*           Trace, Sniffer, Oscilloscope, UDS, Health, Defs & Logs, HUD
 ```
 
-- **Not `moto-mcp`:** This is an automotive engineering cockpit, decoupled from the read-only LLM RPC tool server.
-- **Not `moto-ml`:** ML training is offline; this tool visualizes raw and decoded vehicle telemetry.
-- **Safety Invariant 1:** Passive monitoring only on the vehicle bus. Transmit is restricted to HIL simulation.
+- **Throughput:** ingest is O(1) per frame and independent of rendering (`npm test` measures it; about 130k frames/s in CI-class hardware, ~30x a fully loaded 500 kbit/s bus). The scroll log renders only visible rows; the oscilloscope draws on its own animation frames (at most 30 fps for new data) with min-max decimation per pixel column.
+- **Invariant 1:** the analyzer never transmits on a vehicle bus. SLCAN adapters open in listen-only mode (`L`); the UDS composer only reaches the simulated ECU.
+- **Invariant 2:** decoding uses only the pinned defs. Loading another DBC is possible for analysis and is shown as "custom DBC" in the header.
+- **Safety outputs:** the HUD shows the cornering level the safety partition sent (0x023); without a fresh, E2E-valid status it shows UNAVAILABLE, never GREEN.
+- **Not** `moto-mcp` (LLM tools) and **not** `moto-ml` (training).
 
 ---
 

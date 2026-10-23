@@ -8,508 +8,307 @@ import { SyncPanel } from './components/SyncPanel';
 import { AttitudeGauge } from './components/AttitudeGauge';
 import { ReplayScrubber } from './components/ReplayScrubber';
 import { HealthPanel } from './components/HealthPanel';
-import {
-  CockpitTab,
-  CanFrame,
-  BusStats,
-  TelemetrySource,
-  ByteSnifferRecord,
-  ByteActivityStatus,
-  DbcMessageDef,
-} from './types/can';
+import { BusRole, CanFrame, CockpitTab, TelemetrySource } from './types/can';
+import { DEFS } from './defs';
+import { CaptureStore } from './state/captureStore';
+import { useCapture } from './state/useCapture';
 import { VirtualCanBus } from './services/virtualBus';
-import { DEFAULT_MOTO_MESSAGES } from './services/dbcParser';
 import { WebSerialCanAdapter } from './services/webSerialCan';
 import { WebSocketStreamClient } from './services/streamClient';
-import { IsoTpReassembler } from './services/isoTp';
+
+/** Frames replayed silently to rebuild the views after a backward seek. */
+const REPLAY_REBUILD_WINDOW = 2000;
+/** Longest real wait between two replayed frames (a gap in the log is not waited out). */
+const REPLAY_MAX_GAP_MS = 1000;
+const DEFAULT_WS_URL = 'ws://localhost:8000/ws/live';
+
+export type WsStatus = 'connected' | 'connecting' | 'disconnected' | 'error';
 
 export function App() {
+  const [store] = useState(() => new CaptureStore(DEFS));
+  useCapture(store);
+
   const [activeTab, setActiveTab] = useState<CockpitTab>('trace');
   const [isRunning, setIsRunning] = useState<boolean>(true);
   const [source, setSource] = useState<TelemetrySource>('virtual');
+  const [usbRole, setUsbRole] = useState<BusRole>('vehicle');
+  const [wsUrl, setWsUrl] = useState<string>(DEFAULT_WS_URL);
+  const [wsStatus, setWsStatus] = useState<WsStatus>('disconnected');
   const [showAttitudeHud, setShowAttitudeHud] = useState<boolean>(true);
+  const [msgPerSec, setMsgPerSec] = useState<number>(0);
+  const [sourceError, setSourceError] = useState<string | null>(null);
 
-  // Time Machine Replay state
+  // Time Machine replay
   const [replayFrames, setReplayFrames] = useState<CanFrame[]>([]);
   const [replayIndex, setReplayIndex] = useState<number>(0);
   const [isReplaying, setIsReplaying] = useState<boolean>(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
+  const replayIndexRef = useRef<number>(0);
 
-  // Live vehicle dynamics state from Frame 0x021
-  const [vehicleDynamics, setVehicleDynamics] = useState<{
-    leanAngle: number;
-    rollRate: number;
-    lateralAccel: number;
-  }>({
-    leanAngle: 0,
-    rollRate: 0,
-    lateralAccel: 0,
-  });
-
-  // Subsystem health state for W1-W5
-  const [vehicleHealth, setVehicleHealth] = useState({
-    rpm: 0,
-    speed: 0,
-    throttlePct: 0,
-    gear: 1,
-    coolantTemp: 75,
-    frontWheelSpeed: 0,
-    rearWheelSpeed: 0,
-    absActive: false,
-    rtCoreAlive: 0,
-    safetyNodeAlive: 0,
-  });
-
-  // Ring buffers and maps
-  const [framesMap, setFramesMap] = useState<Map<number, CanFrame>>(new Map());
-  const [framesLog, setFramesLog] = useState<CanFrame[]>([]);
-  const [snifferMap, setSnifferMap] = useState<Map<number, ByteSnifferRecord>>(new Map());
-  const [signalsHistory, setSignalsHistory] = useState<Map<string, { time: number; value: number }[]>>(new Map());
-  const [activeDbcMessages, setActiveDbcMessages] = useState<DbcMessageDef[]>(DEFAULT_MOTO_MESSAGES);
-
-  // Telemetry stats
-  const [stats, setStats] = useState<BusStats>({
-    busLoadPct: 32.4,
-    msgPerSec: 0,
-    errorFrames: 0,
-    totalRx: 0,
-    uptimeSec: 0,
-  });
-
-  const virtualBusRef = useRef<VirtualCanBus | null>(null);
+  const [virtualBus] = useState(() => new VirtualCanBus(DEFS));
   const webSerialRef = useRef<WebSerialCanAdapter | null>(null);
   const webSocketRef = useRef<WebSocketStreamClient | null>(null);
-  const isoTpRef = useRef<IsoTpReassembler | null>(null);
   const rxCounterRef = useRef<number>(0);
-  const startTimeRef = useRef<number>(Date.now());
 
-  // Frame processing callback
-  const handleIncomingFrame = useCallback((frame: CanFrame) => {
-    rxCounterRef.current += 1;
+  // Pause-on-trigger (fires on the first matching frame after arming).
+  const triggerIdRef = useRef<number | null>(null);
+  const [triggerArmed, setTriggerArmed] = useState<boolean>(false);
+  const pauseRef = useRef<() => void>(() => undefined);
 
-    // Update dynamics if frame is 0x021
-    if (frame.id === 0x021 && frame.decodedSignals) {
-      setVehicleDynamics({
-        leanAngle: typeof frame.decodedSignals.LeanAngle === 'number' ? frame.decodedSignals.LeanAngle : 0,
-        rollRate: typeof frame.decodedSignals.RollRate === 'number' ? frame.decodedSignals.RollRate : 0,
-        lateralAccel: typeof frame.decodedSignals.LateralAccel === 'number' ? frame.decodedSignals.LateralAccel : 0,
-      });
-    }
-
-    // Update subsystem health parameters
-    if (frame.id === 0x020 && frame.decodedSignals) {
-      setVehicleHealth((prev) => ({
-        ...prev,
-        rpm: typeof frame.decodedSignals?.EngineSpeed === 'number' ? frame.decodedSignals.EngineSpeed : prev.rpm,
-        speed: typeof frame.decodedSignals?.VehicleSpeed === 'number' ? frame.decodedSignals.VehicleSpeed : prev.speed,
-        throttlePct: typeof frame.decodedSignals?.ThrottlePosition === 'number' ? frame.decodedSignals.ThrottlePosition : prev.throttlePct,
-        gear: typeof frame.decodedSignals?.GearPosition === 'number' ? frame.decodedSignals.GearPosition : prev.gear,
-        coolantTemp: typeof frame.decodedSignals?.EngineCoolantTemp === 'number' ? frame.decodedSignals.EngineCoolantTemp : prev.coolantTemp,
-      }));
-    } else if (frame.id === 0x110 && frame.decodedSignals) {
-      setVehicleHealth((prev) => ({
-        ...prev,
-        frontWheelSpeed: typeof frame.decodedSignals?.FrontWheelSpeed === 'number' ? frame.decodedSignals.FrontWheelSpeed : prev.frontWheelSpeed,
-        rearWheelSpeed: typeof frame.decodedSignals?.RearWheelSpeed === 'number' ? frame.decodedSignals.RearWheelSpeed : prev.rearWheelSpeed,
-        absActive: frame.decodedSignals?.AbsIntervention === 1,
-      }));
-    } else if (frame.id === 0x081 && frame.decodedSignals) {
-      setVehicleHealth((prev) => ({
-        ...prev,
-        rtCoreAlive: typeof frame.decodedSignals?.AliveCounter === 'number' ? frame.decodedSignals.AliveCounter : prev.rtCoreAlive,
-      }));
-    } else if (frame.id === 0x082 && frame.decodedSignals) {
-      setVehicleHealth((prev) => ({
-        ...prev,
-        safetyNodeAlive: typeof frame.decodedSignals?.AliveCounter === 'number' ? frame.decodedSignals.AliveCounter : prev.safetyNodeAlive,
-      }));
-    }
-
-    // 1. Update Overwrite Map
-    setFramesMap((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(frame.id);
-
-      const changedBytes: boolean[] = [];
-      if (existing) {
-        for (let i = 0; i < frame.data.length; i++) {
-          changedBytes.push(existing.data[i] !== frame.data[i]);
-        }
+  const ingest = useCallback(
+    (frame: CanFrame) => {
+      store.ingest(frame);
+      rxCounterRef.current += 1;
+      if (triggerIdRef.current !== null && frame.id === triggerIdRef.current) {
+        triggerIdRef.current = null;
+        setTriggerArmed(false);
+        pauseRef.current();
       }
+    },
+    [store]
+  );
 
-      next.set(frame.id, {
-        ...frame,
-        count: existing ? existing.count + 1 : 1,
-        prevData: existing ? existing.data : undefined,
-        changedBytes: existing ? changedBytes : undefined,
-      });
-      return next;
-    });
+  const stopLiveSources = useCallback(() => {
+    virtualBus.stop();
+    webSerialRef.current?.disconnect();
+    webSerialRef.current = null;
+    webSocketRef.current?.disconnect();
+    webSocketRef.current = null;
+  }, [virtualBus]);
 
-    // 2. Update Scroll Ring Buffer (limit to 300)
-    setFramesLog((prev) => {
-      const next = [...prev, frame];
-      if (next.length > 300) next.shift();
-      return next;
-    });
-
-    // 3. Update SavvyCAN Byte Sniffer Heatmap
-    setSnifferMap((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(frame.id);
-
-      const byteStatuses: ByteActivityStatus[] = [];
-      const changeCounts: number[] = existing ? [...existing.changeCounts] : Array(8).fill(0);
-      const notchedBytes: boolean[] = existing ? [...existing.notchedBytes] : Array(8).fill(false);
-
-      for (let i = 0; i < 8; i++) {
-        const currentByte = frame.data[i] ?? 0;
-        const prevByte = existing ? existing.currentBytes[i] ?? currentByte : currentByte;
-
-        if (currentByte === prevByte) {
-          byteStatuses.push('static');
-        } else if (currentByte > prevByte) {
-          byteStatuses.push('inc');
-          changeCounts[i] = (changeCounts[i] || 0) + 1;
-        } else {
-          byteStatuses.push('dec');
-          changeCounts[i] = (changeCounts[i] || 0) + 1;
-        }
-      }
-
-      // 64-bit flip counters
-      const bitFlips = existing ? [...existing.bitFlips] : Array(64).fill(0);
-      if (existing) {
-        for (let b = 0; b < 8; b++) {
-          const cur = frame.data[b] ?? 0;
-          const prv = existing.currentBytes[b] ?? 0;
-          const xor = cur ^ prv;
-          if (xor !== 0) {
-            for (let bit = 0; bit < 8; bit++) {
-              if ((xor & (1 << bit)) !== 0) {
-                const bitIndex = b * 8 + (7 - bit);
-                bitFlips[bitIndex] = (bitFlips[bitIndex] || 0) + 1;
-              }
-            }
-          }
-        }
-      }
-
-      const frameHistory = existing
-        ? [...existing.frameHistory, { timestamp: frame.timestamp, data: frame.data }]
-        : [{ timestamp: frame.timestamp, data: frame.data }];
-      if (frameHistory.length > 16) frameHistory.shift();
-
-      next.set(frame.id, {
-        id: frame.id,
-        idHex: frame.idHex,
-        name: frame.name,
-        dlc: frame.dlc,
-        currentBytes: frame.data,
-        prevBytes: existing ? existing.currentBytes : frame.data,
-        byteStatuses,
-        changeCounts,
-        notchedBytes,
-        lastUpdated: performance.now(),
-        frameHistory,
-        bitFlips,
-      });
-
-      return next;
-    });
-
-    // 4. Update Oscilloscope Signals History
-    if (frame.decodedSignals) {
-      setSignalsHistory((prev) => {
-        const next = new Map(prev);
-        Object.entries(frame.decodedSignals!).forEach(([sigName, val]) => {
-          if (typeof val === 'number') {
-            const arr = next.get(sigName) || [];
-            const newArr = [...arr, { time: frame.timestamp, value: val }];
-            if (newArr.length > 400) newArr.shift();
-            next.set(sigName, newArr);
-          }
+  const startLiveSource = useCallback(
+    (s: TelemetrySource) => {
+      setSourceError(null);
+      if (s === 'virtual') {
+        virtualBus.start(ingest);
+      } else if (s === 'webserial') {
+        const adapter = new WebSerialCanAdapter(usbRole);
+        webSerialRef.current = adapter;
+        adapter.connect(115200, ingest).catch((err: Error) => {
+          setSourceError(`USB CAN: ${err.message}`);
+          setIsRunning(false);
         });
-        return next;
-      });
-    }
-
-    // 5. Route diagnostic frames to ISO-TP reassembler
-    if (frame.id === 0x18DAF110 || frame.id === 0x7E8) {
-      isoTpRef.current?.processFrame(frame.id, frame.data);
-    }
-  }, []);
-
-  // Initialize and manage Virtual Bus
-  useEffect(() => {
-    const vbus = new VirtualCanBus();
-    virtualBusRef.current = vbus;
-
-    if (isRunning && source === 'virtual') {
-      vbus.start(handleIncomingFrame);
-    }
-
-    return () => {
-      vbus.stop();
-    };
-  }, [handleIncomingFrame]);
-
-  // Handle play/pause
-  const togglePlay = () => {
-    setIsRunning((prev) => {
-      const next = !prev;
-      if (virtualBusRef.current) {
-        if (next && source === 'virtual') {
-          virtualBusRef.current.start(handleIncomingFrame);
-        } else {
-          virtualBusRef.current.stop();
-        }
+      } else if (s === 'websocket') {
+        const client = new WebSocketStreamClient({ url: wsUrl, onFrame: ingest, onStatusChange: setWsStatus });
+        webSocketRef.current = client;
+        client.connect();
       }
-      return next;
-    });
+    },
+    [virtualBus, ingest, usbRole, wsUrl]
+  );
+
+  // Start the default virtual source once; stop everything on unmount.
+  useEffect(() => {
+    virtualBus.start(ingest);
+    return () => virtualBus.stop();
+  }, [virtualBus, ingest]);
+
+  const setRunning = useCallback(
+    (next: boolean) => {
+      setIsRunning(next);
+      if (source === 'local_file') return;
+      if (next) startLiveSource(source);
+      else stopLiveSources();
+    },
+    [source, startLiveSource, stopLiveSources]
+  );
+
+  useEffect(() => {
+    pauseRef.current = () => {
+      setRunning(false);
+      setIsReplaying(false);
+    };
+  }, [setRunning]);
+
+  const handleSourceChange = (s: TelemetrySource) => {
+    stopLiveSources();
+    setIsReplaying(false);
+    setSource(s);
+    if (s === 'local_file') {
+      setIsRunning(false);
+      setActiveTab('sync');
+      return;
+    }
+    setIsRunning(true);
+    startLiveSource(s);
   };
 
-  // Handle clear buffers
   const handleClear = () => {
-    setFramesMap(new Map());
-    setFramesLog([]);
-    setSignalsHistory(new Map());
-    setSnifferMap(new Map());
+    store.clear();
     rxCounterRef.current = 0;
   };
 
-  // Notch filter toggle in Sniffer
-  const handleToggleNotch = (id: number, byteIdx: number) => {
-    setSnifferMap((prev) => {
-      const next = new Map(prev);
-      const rec = next.get(id);
-      if (rec) {
-        const notched = [...rec.notchedBytes];
-        notched[byteIdx] = !notched[byteIdx];
-        next.set(id, { ...rec, notchedBytes: notched });
-      }
-      return next;
-    });
-  };
+  // ------------------------------------------------------------ replay
 
-  const handleInvertNotch = (id: number) => {
-    setSnifferMap((prev) => {
-      const next = new Map(prev);
-      const rec = next.get(id);
-      if (rec) {
-        const inverted = rec.notchedBytes.map((n) => !n);
-        next.set(id, { ...rec, notchedBytes: inverted });
-      }
-      return next;
-    });
-  };
+  // replayIndexRef is the source of truth for the replay position; every writer sets
+  // it and the state together (a state-to-ref sync effect would lag and rewind it).
 
-  const handleClearNotches = () => {
-    setSnifferMap((prev) => {
-      const next = new Map(prev);
-      next.forEach((rec, id) => {
-        next.set(id, { ...rec, notchedBytes: Array(8).fill(false) });
-      });
-      return next;
-    });
-  };
-
-  // Time Machine Log File Loader
   const handleLogLoaded = (frames: CanFrame[]) => {
+    stopLiveSources();
+    setIsRunning(false);
+    setIsReplaying(false);
+    store.clear();
     setReplayFrames(frames);
     setReplayIndex(0);
+    replayIndexRef.current = 0;
     setSource('local_file');
-    setIsReplaying(false);
-    // Pause virtual bus when log is loaded
-    virtualBusRef.current?.stop();
-    setIsRunning(false);
-    // Feed the first frame
-    if (frames.length > 0) {
-      handleIncomingFrame(frames[0]);
-    }
+    if (frames.length > 0) ingest(frames[0]);
   };
 
-  // Time Machine Playback Timer
+  // Each frame is scheduled after the recorded gap to the previous one, divided by the
+  // speed; frames closer than a timer tick are emitted together.
   useEffect(() => {
     if (!isReplaying || replayFrames.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
 
-    const intervalMs = Math.max(5, 20 / playbackSpeed);
-    const interval = setInterval(() => {
-      setReplayIndex((prev) => {
-        if (prev + 1 >= replayFrames.length) {
+    const step = () => {
+      if (cancelled) return;
+      let idx = replayIndexRef.current;
+      const startT = replayFrames[idx]?.timestamp ?? 0;
+      while (idx + 1 < replayFrames.length) {
+        const gapMs = ((replayFrames[idx + 1].timestamp - startT) * 1000) / playbackSpeed;
+        if (gapMs > 4) break;
+        idx += 1;
+        ingest(replayFrames[idx]);
+      }
+      replayIndexRef.current = idx;
+      setReplayIndex(idx);
+      if (idx + 1 >= replayFrames.length) {
+        setIsReplaying(false);
+        return;
+      }
+      const waitMs = Math.min(
+        REPLAY_MAX_GAP_MS,
+        Math.max(0, ((replayFrames[idx + 1].timestamp - replayFrames[idx].timestamp) * 1000) / playbackSpeed)
+      );
+      timer = setTimeout(() => {
+        if (cancelled) return;
+        // Read the index again: a seek during playback moves it.
+        const next = replayIndexRef.current + 1;
+        if (next >= replayFrames.length) {
           setIsReplaying(false);
-          return prev;
+          return;
         }
-        const nextIndex = prev + 1;
-        handleIncomingFrame(replayFrames[nextIndex]);
-        return nextIndex;
-      });
-    }, intervalMs);
+        replayIndexRef.current = next;
+        ingest(replayFrames[next]);
+        step();
+      }, waitMs);
+    };
+    step();
 
-    return () => clearInterval(interval);
-  }, [isReplaying, replayFrames, playbackSpeed, handleIncomingFrame]);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [isReplaying, replayFrames, playbackSpeed, ingest]);
 
-  // Handle manual scrub
-  const handleScrub = (index: number) => {
-    if (index >= 0 && index < replayFrames.length) {
-      setReplayIndex(index);
-      handleIncomingFrame(replayFrames[index]);
+  // Forward seeks feed the skipped frames; backward seeks rebuild the views from a
+  // window before the target, so no view keeps frames from "the future".
+  const seekTo = (index: number) => {
+    if (index < 0 || index >= replayFrames.length) return;
+    const current = replayIndexRef.current;
+    if (index > current && index - current <= REPLAY_REBUILD_WINDOW) {
+      for (let i = current + 1; i <= index; i++) ingest(replayFrames[i]);
+    } else if (index !== current) {
+      store.clear();
+      for (let i = Math.max(0, index - REPLAY_REBUILD_WINDOW); i <= index; i++) ingest(replayFrames[i]);
     }
+    replayIndexRef.current = index;
+    setReplayIndex(index);
   };
 
-  // Step controls
-  const handleStepForward = () => {
-    if (replayIndex + 1 < replayFrames.length) {
-      const next = replayIndex + 1;
-      setReplayIndex(next);
-      handleIncomingFrame(replayFrames[next]);
-    }
-  };
+  // ------------------------------------------------------------ 1 s sampling
 
-  const handleStepBackward = () => {
-    if (replayIndex - 1 >= 0) {
-      const prev = replayIndex - 1;
-      setReplayIndex(prev);
-      handleIncomingFrame(replayFrames[prev]);
-    }
-  };
-
-  // 1-second interval to update stats
+  const isReplayingRef = useRef(isReplaying);
+  const playbackSpeedRef = useRef(playbackSpeed);
   useEffect(() => {
+    isReplayingRef.current = isReplaying;
+    playbackSpeedRef.current = playbackSpeed;
+  }, [isReplaying, playbackSpeed]);
+
+  useEffect(() => {
+    let last = performance.now();
     const interval = setInterval(() => {
-      const elapsedSec = (Date.now() - startTimeRef.current) / 1000;
-      const rate = rxCounterRef.current;
+      const now = performance.now();
+      const wallSec = (now - last) / 1000;
+      last = now;
+      store.sampleSecond(wallSec * (isReplayingRef.current ? playbackSpeedRef.current : 1));
+      setMsgPerSec(Math.round(rxCounterRef.current / wallSec));
       rxCounterRef.current = 0;
-
-      const calculatedLoad = Math.min(95, Math.max(12, (rate * 125 * 8 / 500000) * 100));
-
-      setStats((prev) => ({
-        busLoadPct: isRunning || isReplaying ? calculatedLoad : 0,
-        msgPerSec: isRunning || isReplaying ? rate : 0,
-        errorFrames: 0,
-        totalRx: prev.totalRx + rate,
-        uptimeSec: Math.floor(elapsedSec),
-      }));
     }, 1000);
-
     return () => clearInterval(interval);
-  }, [isRunning, isReplaying]);
+  }, [store]);
 
-  const currentReplayTime = replayFrames[replayIndex]?.timestamp || 0;
-  const totalReplayDuration = replayFrames[replayFrames.length - 1]?.timestamp || 0;
+  const currentReplayTime = replayFrames[replayIndex]?.timestamp ?? 0;
+  const totalReplayDuration = replayFrames[replayFrames.length - 1]?.timestamp ?? 0;
+  const canTransmit = source === 'virtual' && isRunning;
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-background text-slate-100 font-sans">
-      {/* Top Header & Navigation */}
       <Header
         activeTab={activeTab}
         onTabChange={setActiveTab}
         isRunning={isRunning}
-        onTogglePlay={togglePlay}
+        onTogglePlay={() => setRunning(!isRunning)}
         onClear={handleClear}
-        stats={stats}
+        busLoad={store.busLoad}
+        msgPerSec={msgPerSec}
+        totalRx={store.totalRx}
         source={source}
-        onSourceChange={(s) => {
-          setSource(s);
-          // Stop running sources cleanly
-          virtualBusRef.current?.stop();
-          webSerialRef.current?.disconnect();
-          webSocketRef.current?.disconnect();
-          setIsReplaying(false);
-
-          if (s === 'virtual') {
-            if (isRunning) virtualBusRef.current?.start(handleIncomingFrame);
-          } else if (s === 'webserial') {
-            webSerialRef.current = new WebSerialCanAdapter(activeDbcMessages);
-            webSerialRef.current
-              .connect(115200, handleIncomingFrame)
-              .catch((err: any) => {
-                alert('WebSerial connection error: ' + err.message);
-                setSource('virtual');
-                virtualBusRef.current?.start(handleIncomingFrame);
-              });
-          } else if (s === 'websocket') {
-            webSocketRef.current = new WebSocketStreamClient({
-              url: 'ws://localhost:8000/ws/live',
-              onFrame: handleIncomingFrame,
-              onStats: (newStats) => setStats((prev) => ({ ...prev, ...newStats })),
-              dbcMessages: activeDbcMessages,
-            });
-            webSocketRef.current.connect();
-          }
-        }}
+        onSourceChange={handleSourceChange}
+        usbRole={usbRole}
+        onUsbRoleChange={setUsbRole}
+        wsUrl={wsUrl}
+        onWsUrlChange={setWsUrl}
+        wsStatus={wsStatus}
+        defsRef={DEFS.ref}
+        customDbc={store.customPlatformDbc}
         showAttitudeHud={showAttitudeHud}
         onToggleAttitudeHud={() => setShowAttitudeHud(!showAttitudeHud)}
       />
 
-      {/* Main Cockpit Body with Optional Attitude HUD Widget */}
+      {sourceError && (
+        <div className="bg-rose-950/60 border-b border-rose-800 text-rose-200 text-xs font-mono px-4 py-1.5 flex justify-between">
+          <span>{sourceError}</span>
+          <button onClick={() => setSourceError(null)} className="text-rose-300 hover:text-white">
+            dismiss
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 flex overflow-hidden relative">
         <main className="flex-1 overflow-hidden">
           {activeTab === 'trace' && (
             <TracePanel
-              framesMap={framesMap}
-              framesLog={framesLog}
-              onTriggerPause={() => {
-                if (isRunning) togglePlay();
-                if (isReplaying) setIsReplaying(false);
+              store={store}
+              triggerArmed={triggerArmed}
+              onArmTrigger={(id) => {
+                triggerIdRef.current = id;
+                setTriggerArmed(id !== null);
               }}
             />
           )}
-
-          {activeTab === 'sniffer' && (
-            <SnifferPanel
-              snifferMap={snifferMap}
-              onToggleNotch={handleToggleNotch}
-              onInvertNotch={handleInvertNotch}
-              onClearNotches={handleClearNotches}
+          {activeTab === 'sniffer' && <SnifferPanel store={store} />}
+          {activeTab === 'oscilloscope' && <OscilloscopePanel store={store} />}
+          {activeTab === 'uds' && (
+            <UdsPanel
+              store={store}
+              canTransmit={canTransmit}
+              onTransmit={(payload) => virtualBus.injectTesterRequest(payload)}
             />
           )}
-
-          {activeTab === 'oscilloscope' && (
-            <OscilloscopePanel signalsHistory={signalsHistory} />
-          )}
-
-          {activeTab === 'uds' && <UdsPanel />}
-
-          {activeTab === 'health' && (
-            <HealthPanel
-              stats={stats}
-              currentRpm={vehicleHealth.rpm}
-              currentSpeed={vehicleHealth.speed}
-              currentLeanAngle={vehicleDynamics.leanAngle}
-              currentCoolantTemp={vehicleHealth.coolantTemp}
-              gear={vehicleHealth.gear}
-              throttlePct={vehicleHealth.throttlePct}
-              frontWheelSpeed={vehicleHealth.frontWheelSpeed}
-              rearWheelSpeed={vehicleHealth.rearWheelSpeed}
-              absActive={vehicleHealth.absActive}
-              rtCoreAlive={vehicleHealth.rtCoreAlive}
-              safetyNodeAlive={vehicleHealth.safetyNodeAlive}
-            />
-          )}
-
-          {activeTab === 'sync' && (
-            <SyncPanel
-              onDbcLoaded={setActiveDbcMessages}
-              activeDbcMessages={activeDbcMessages}
-              onLogLoaded={handleLogLoaded}
-            />
-          )}
+          {activeTab === 'health' && <HealthPanel store={store} />}
+          {activeTab === 'sync' && <SyncPanel store={store} onLogLoaded={handleLogLoaded} />}
         </main>
 
-        {/* Floating / Docked Motorcycle Dynamics HUD */}
         {showAttitudeHud && (
-          <div className="absolute bottom-4 right-4 z-20 w-80 shadow-2xl transition-all">
-            <AttitudeGauge
-              leanAngleDeg={vehicleDynamics.leanAngle}
-              rollRateDegS={vehicleDynamics.rollRate}
-              lateralAccelG={vehicleDynamics.lateralAccel}
-            />
+          <div className="absolute bottom-4 right-4 z-20 w-80 shadow-2xl">
+            <AttitudeGauge store={store} />
           </div>
         )}
       </div>
 
-      {/* Bottom Replay Scrubber (Shown whenever a log file is loaded or source is local_file) */}
       {(source === 'local_file' || replayFrames.length > 0) && (
         <ReplayScrubber
           isReplaying={isReplaying}
@@ -520,10 +319,10 @@ export function App() {
           totalDurationSec={totalReplayDuration}
           playbackSpeed={playbackSpeed}
           onSpeedChange={setPlaybackSpeed}
-          onScrub={handleScrub}
-          onStepForward={handleStepForward}
-          onStepBackward={handleStepBackward}
-          onRestart={() => handleScrub(0)}
+          onScrub={seekTo}
+          onStepForward={() => seekTo(replayIndexRef.current + 1)}
+          onStepBackward={() => seekTo(replayIndexRef.current - 1)}
+          onRestart={() => seekTo(0)}
         />
       )}
     </div>
