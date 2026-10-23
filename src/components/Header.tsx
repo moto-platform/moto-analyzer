@@ -36,6 +36,7 @@ export const TABS: { id: CockpitTab; key: string; label: string }[] = [
   { id: 'oscilloscope', key: 'O', label: 'Oscilloscope' },
   { id: 'uds', key: 'U', label: 'UDS' },
   { id: 'health', key: 'H', label: 'Health' },
+  { id: 'cluster', key: 'F', label: 'Cluster' },
   { id: 'sync', key: 'D', label: 'Defs & logs' },
 ];
 
