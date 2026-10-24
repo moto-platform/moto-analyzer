@@ -35,6 +35,11 @@ export function availableChannels(store: CaptureStore): ChannelInfo[] {
     add({ key: didKey(d.name), label: `DID ${d.name}`, group: d.verified ? 'vehicle DID (verified)' : 'vehicle DID (unverified)', unit: d.unit, min: d.min, max: d.max });
   }
   for (const key of store.history.keys()) {
+    const rec = store.recordedMeta.get(key);
+    if (rec) {
+      add({ key, label: rec.label, group: rec.group, unit: rec.unit, min: 0, max: 0 });
+      continue;
+    }
     add({ key, label: key, group: 'other', unit: '', min: 0, max: 0 });
   }
   return out;
