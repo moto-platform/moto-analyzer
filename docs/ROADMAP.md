@@ -20,16 +20,17 @@ The analyzer is the developer's engineering tool. It shows frames, decoded signa
 | UDS observer | ISO-TP reassembly, request/response pairing, DIDs, DTCs with status bits, NRCs, `tester_policy` and second-tester alerts; 0x19 snapshot and extended data shown as raw bytes |
 | Health | D-079 windows W1-W5, E2E supervisor, heartbeats |
 | HUD | cornering level from 0x023; UNAVAILABLE without a fresh, E2E-valid status |
+| Cluster (A1, analyzer#13) | key **F**: tach, speed, coolant / battery / throttle, lean, telltales (cornering level, BSM, immobilizer, ECU present), node heartbeats; every readout from a defs name, "no data" or STALE (`E2E_TIMEOUT_CYCLES` x DBC cycle) instead of a guessed value; cornering UNAVAILABLE without a fresh frame |
 | Sources | virtual bus (simulated CL250 + platform bus), log replay, SLCAN listen-only, WebSocket client (`StreamMessageDto`) |
-| Quality | 53 vitest tests (services), CI on push and PR (analyzer#10) |
+| Live source (A2, server#24 + analyzer#14) | moto-server `/ws/live`: first message `hello` with the token (header token field, sessionStorage only, never in the URL), `batch` envelopes, `heartbeat` every 5 s with `source` and `dropped`; 1008/1011 closes are not retried; the header shows `source mock` in amber. Server side: per-client ring of 256 batches (drop oldest), `MOTO_LIVE_SOURCE=mock` (default `none`); the real source (rt-core via the Raspi, D-077) is still open |
+| Quality | 79 vitest tests, CI on push and PR (analyzer#10) |
 
 ## Tasks (in order)
 
 | # | Task | Depends on | Done when |
 |---|---|---|---|
-| A1 | **Instrument cluster**, rebuilt from defs signals only (RPM, speed, gear estimate, coolant, battery, lean); the Antigravity panel on `ext/antigravity-cluster-tauri` used signals defs does not define | — | every value comes from a defs name; missing or stale inputs show "no data", never a guessed value; `vss-schema-guardian` clean |
-| A2 | **Live source end to end:** moto-server `/ws/live` (subscription, per-client ring buffer, slow-consumer drop) feeding the existing WebSocket client | moto-server C4 | analyzer shows the server mock stream live; reconnect after a server restart; server tests for handshake, subscription, disconnect |
-| A3 | **Recorded sessions from moto-server** as an engineering source: session list (`GET /sessions`), report summary, signal series (`/sessions/{id}/series`, downsampled) into the oscilloscope and replay | A2, server series endpoint | a stored session opens in the scope and replays; token kept out of the repo and the URL |
+| A1.1 | **Tach rev limit:** the tach arc follows the DBC range of the RPM signal (0-16383.75 rpm), so normal RPM sits low on the arc; scale it to the real rev limit | a sourced rev-limit constant in defs (`/signal-change`); never a literal in the analyzer | the arc end comes from the defs constant; the DBC range stays the fallback |
+| A3 | **Recorded sessions from moto-server** as an engineering source: session list (`GET /sessions`), report summary, signal series (`/sessions/{id}/series`, downsampled) into the oscilloscope and replay | server series endpoint | a stored session opens in the scope and replays; token kept out of the repo and the URL |
 | A4 | **Session comparison:** two recordings on a common time or distance axis, overlay and difference per signal | A3 | ride A vs ride B with a difference trace; export CSV |
 | A5 | **Decoded freeze frames (D-080):** turn the 0x19 snapshot bytes into named values | the snapshot record layout in defs (CONFIRM it exists; otherwise a `/signal-change` first) | snapshot cards show names and units from defs, raw bytes as fallback |
 | A6 | **Desktop (Tauri 2) and native HAL:** SocketCAN with `listen-only on`, SLCAN `L`, candleLight/gs_usb; the HAL refuses any interface it cannot open listen-only | rustup on the dev machine; red zone, Claude only | a test proves the refusal; the shell runs the same frontend; `.dmg`, AppImage/`.deb`, `.msi` from CI |
