@@ -15,7 +15,9 @@ Every CAN ID, signal, scaling, cycle time, E2E DataID, DID, UDS address and test
 - **Oscilloscope:** any platform signal or vehicle DID, dual cursors with per-channel values, host-side math channels (derivative, difference, product, ratio), CSV and PNG export.
 - **UDS observer:** passive decoding of the tester's ISO 14229 conversation on the vehicle bus (ISO-TP reassembly, request/response pairing, DID values with stale state, DTCs with status bits, NRC names), alerts for a request outside `tester_policy` or a functional request (a second tester). The request composer sends only to the simulated ECU.
 - **Health:** the D-079 window entry conditions (W1-W5) evaluated on the observed inputs, the E2E supervisor of the platform bus (CRC-8/SAE-J1850, alive counter, timeout) and node heartbeats.
-- **Sources:** virtual bus (simulated CL250 vehicle bus with the UDS conversation, platform bus with E2E), log replay at recorded timing, moto-server WebSocket stream (`StreamMessageDto`), and USB SLCAN adapters opened listen-only.
+- **Cluster (key F):** instrument cluster (tach, speed, coolant, battery, throttle, lean, telltales, node heartbeats) built only from defs signal names. A missing input shows "no data" and an old one STALE, never a guessed value; the cornering telltale shows UNAVAILABLE without a fresh frame.
+- **Sources:** virtual bus (simulated CL250 vehicle bus with the UDS conversation, platform bus with E2E), log replay at recorded timing, the moto-server live stream (`/ws/live`, `StreamMessageDto`), and USB SLCAN adapters opened listen-only.
+- **Live stream:** the client sends a `hello` with the token entered in the header's token field (kept in sessionStorage, never in the URL); a rejected token (close 1008/1011) is not retried. The header shows the server's `source` from its heartbeat; `source mock` (server started with `MOTO_LIVE_SOURCE=mock`) is shown in amber so synthetic data is not mistaken for a real bus.
 
 ## Quick start
 
@@ -44,7 +46,7 @@ src/services/udsMonitor.ts passive UDS observer of the vehicle bus
 src/state/captureStore.ts  frames, 50k-frame log ring, sniffer, Float64Array signal rings;
                            UI notified at most every 66 ms, however fast frames arrive
         ▼
-src/components/*           Trace, Sniffer, Oscilloscope, UDS, Health, Defs & Logs, HUD
+src/components/*           Trace, Sniffer, Oscilloscope, UDS, Health, Defs & Logs, HUD, Cluster
 ```
 
 - **Throughput:** ingest is O(1) per frame and independent of rendering (`npm test` measures it; about 130k frames/s in CI-class hardware, ~30x a fully loaded 500 kbit/s bus). The scroll log renders only visible rows; the oscilloscope draws on its own animation frames (at most 30 fps for new data) with min-max decimation per pixel column.
