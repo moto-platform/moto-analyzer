@@ -15,6 +15,7 @@ Real-time CAN bus analyzer and telemetry cockpit (Web Host & Cross-Platform Desk
 - No vehicle bus write access outside designated simulation modes (Platform Invariant 1: passive monitoring).
 - Not `moto-mcp` (read-only LLM RPC tool server) — this is a deterministic automotive engineering cockpit.
 - Not `moto-ml` (offline ML training) — no machine learning model training here.
+- Not the rider layer (D-085): no LLM, no fault-catalog matching, no plain-language diagnosis; those are moto-mcp and the rider front end (Q-037).
 - No invented signals or hardcoded CAN IDs (Platform Invariant 2: decoded signals derive strictly from `moto-vehicle-defs`).
 - No unauthorized GPS position leak (Platform Invariant 7 / D-076: strictly local / self-hosted auth).
 
@@ -33,7 +34,7 @@ Defs are read at build time from `external/moto-vehicle-defs` (`src/defs/index.t
 
 ## Context
 
-- Master Plan: `moto-vehicle-defs/docs/ideas/can-analyzer-master-plan.md`
+- Roadmap (live task list): `docs/ROADMAP.md`. Scope D-081, layer split D-085. Background only: `external/moto-vehicle-defs/docs/ideas/can-analyzer-master-plan.md` §2-3
 - DBC Definitions: `external/moto-vehicle-defs/dbc/platform.dbc`, `external/moto-vehicle-defs/dbc/cl250.dbc`
 - UDS Specifications: `external/moto-vehicle-defs/uds/vehicle_cl250.yaml`, `uds/iso14229.yaml`, `uds/obd_catalog.yaml`
 - D-079 windows and limits: `external/moto-vehicle-defs/derived/cl250_derived.yaml`, `limits/platform_limits.yaml`
