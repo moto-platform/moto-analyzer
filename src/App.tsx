@@ -10,6 +10,7 @@ import { ReplayScrubber } from './components/ReplayScrubber';
 import { HealthPanel } from './components/HealthPanel';
 import { ClusterPanel } from './components/ClusterPanel';
 import { SessionPanel } from './components/SessionPanel';
+import { ComparePanel } from './components/ComparePanel';
 import { ReplayItem, framesToItems, mergeSamples } from './services/replay';
 import { DEFAULT_SERVER_URL, RecordedSeries, mapSeriesKey } from './services/sessionClient';
 import { BusRole, CanFrame, CockpitTab, TelemetrySource } from './types/can';
@@ -347,6 +348,7 @@ export function App() {
           f: () => setActiveTab('cluster'),
           d: () => setActiveTab('sync'),
           e: () => setActiveTab('session'),
+          a: () => setActiveTab('compare'),
           ' ': togglePause,
           c: handleClear,
           x: () => setShowAttitudeHud((v) => !v),
@@ -440,6 +442,9 @@ export function App() {
                 onLoad={handleSessionLoaded}
               />
             )}
+            {activeTab === 'compare' && (
+              <ComparePanel token={wsToken} onTokenChange={handleTokenChange} serverUrl={serverUrl} onServerUrlChange={setServerUrl} />
+            )}
             {activeTab === 'sync' && <SyncPanel store={store} onLogLoaded={handleLogLoaded} />}
           </main>
 
@@ -505,6 +510,7 @@ const HELP: HelpGroup[] = [
       { k: 'F', label: 'Cluster' },
       { k: 'D', label: 'Defs & logs' },
       { k: 'E', label: 'Recorded sessions' },
+      { k: 'A', label: 'Compare two sessions' },
     ],
   },
   {
