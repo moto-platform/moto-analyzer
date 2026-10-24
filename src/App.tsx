@@ -193,6 +193,7 @@ export function App() {
     setIsRunning(false);
     setIsReplaying(false);
     store.clear();
+    store.resetRecordedMeta();
     setReplayFrames(framesToItems(frames));
     setReplayIndex(0);
     replayIndexRef.current = 0;
@@ -206,6 +207,7 @@ export function App() {
     setIsRunning(false);
     setIsReplaying(false);
     store.clear();
+    store.resetRecordedMeta();
     rxCounterRef.current = 0;
     const perKey = series.map((sr) => {
       const m = mapSeriesKey(sr.name, sr.kind);

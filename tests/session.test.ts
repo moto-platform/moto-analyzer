@@ -150,16 +150,20 @@ describe('store: recorded samples', () => {
     expect(store.lastTime).toBe(0.6);
   });
 
-  it('lists recorded channels with response units and clears the metadata', () => {
+  it('lists recorded channels with response units; clear() keeps the metadata, a reset drops it', () => {
     const store = new CaptureStore(DEFS);
     store.setRecordedMeta('sensor:lean', { label: 'lean', group: 'session · sensor', unit: 'deg' });
     store.ingestSample('sensor:lean', 0, 1);
     const ch = availableChannels(store).find((c) => c.key === 'sensor:lean');
     expect(ch).toMatchObject({ label: 'lean', group: 'session · sensor', unit: 'deg' });
     store.clear();
-    expect(store.recordedMeta.size).toBe(0);
+    // A backward replay seek clears the views; the labels must survive it.
     expect(store.history.size).toBe(0);
-    expect(availableChannels(store).find((c) => c.key === 'sensor:lean')).toBeUndefined();
+    expect(store.recordedMeta.get('sensor:lean')?.unit).toBe('deg');
+    store.ingestSample('sensor:lean', 0, 2);
+    expect(availableChannels(store).find((c) => c.key === 'sensor:lean')).toMatchObject({ unit: 'deg' });
+    store.resetRecordedMeta();
+    expect(store.recordedMeta.size).toBe(0);
   });
 
   it('a recorded DID lands on the defs DID channel', () => {

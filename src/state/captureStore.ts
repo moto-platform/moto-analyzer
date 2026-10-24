@@ -50,7 +50,10 @@ export class CaptureStore {
   /** Wall clock (performance.now, ms) when the newest frame arrived; 0 before the first. */
   public lastIngestWallMs = 0;
   public customPlatformDbc: string | null = null;
-  /** Label, group and unit of recorded session series that defs do not describe (sensor, derived). */
+  /**
+   * Label, group and unit of recorded session series that defs do not describe (sensor, derived).
+   * Kept across clear() (a backward replay seek clears the views); a new source resets it.
+   */
   public recordedMeta = new Map<string, RecordedMeta>();
 
   private meter = new BusLoadMeter();
@@ -115,6 +118,11 @@ export class CaptureStore {
     this.recordedMeta.set(key, meta);
   }
 
+  /** Forgets the recorded metadata (a new session or log was loaded). */
+  public resetRecordedMeta() {
+    this.recordedMeta = new Map();
+  }
+
   /** Trace names of the UDS IDs from uds/vehicle_cl250.yaml addressing. */
   private udsName(id: number): string | undefined {
     const a = this.defs.vehicle.addressing;
@@ -175,7 +183,6 @@ export class CaptureStore {
     this.dataVersion++;
     this.sniffer = new Map();
     this.history = new Map();
-    this.recordedMeta = new Map();
     this.busLoad = new Map();
     this.totalRx = 0;
     this.lastTime = 0;
