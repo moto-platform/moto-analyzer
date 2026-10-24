@@ -105,7 +105,7 @@ export interface DbcCatalog {
   messages: DbcMessageDef[];
 }
 
-export type CockpitTab = 'trace' | 'sniffer' | 'oscilloscope' | 'uds' | 'health' | 'cluster' | 'sync' | 'session';
+export type CockpitTab = 'trace' | 'sniffer' | 'oscilloscope' | 'uds' | 'health' | 'cluster' | 'sync' | 'session' | 'compare';
 export type TraceMode = 'overwrite' | 'scroll';
 export type TelemetrySource = 'virtual' | 'local_file' | 'websocket' | 'webserial' | 'server_session';
 

@@ -43,6 +43,7 @@ export const TABS: { id: CockpitTab; key: string; label: string }[] = [
   { id: 'cluster', key: 'F', label: 'Cluster' },
   { id: 'sync', key: 'D', label: 'Defs & logs' },
   { id: 'session', key: 'E', label: 'Sessions' },
+  { id: 'compare', key: 'A', label: 'Compare' },
 ];
 
 const SOURCES: { value: TelemetrySource; label: string; title: string }[] = [
