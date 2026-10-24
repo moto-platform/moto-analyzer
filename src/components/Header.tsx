@@ -20,6 +20,10 @@ interface HeaderProps {
   onUsbRoleChange: (role: BusRole) => void;
   wsUrl: string;
   onWsUrlChange: (url: string) => void;
+  wsToken: string;
+  onWsTokenChange: (token: string) => void;
+  /** Producer named by the server heartbeat ("mock", "none", ...); null before the first one. */
+  wsSource: string | null;
   wsStatus: WsStatus;
   defsRef: string;
   customDbc: string | null;
@@ -101,12 +105,22 @@ export const Header: React.FC<HeaderProps> = (p) => {
                 spellCheck={false}
                 className="term-input w-52"
               />
+              <input
+                type="password"
+                value={p.wsToken}
+                onChange={(e) => p.onWsTokenChange(e.target.value)}
+                placeholder="token"
+                aria-label="moto-server API token"
+                autoComplete="off"
+                className="term-input w-28"
+              />
               <span
                 className={
                   p.wsStatus === 'connected' ? 'text-term-fg' : p.wsStatus === 'connecting' ? 'text-term-amber' : 'text-term-red'
                 }
               >
                 {p.wsStatus === 'connected' ? 'connected' : p.wsStatus === 'connecting' ? '! connecting' : `■ ${p.wsStatus}`}
+                {p.wsStatus === 'connected' && p.wsSource ? <span className={p.wsSource === 'mock' ? 'text-term-amber' : 'text-term-dim'}> · source {p.wsSource}</span> : null}
               </span>
             </label>
           )}
