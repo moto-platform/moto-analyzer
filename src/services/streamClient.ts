@@ -1,10 +1,24 @@
 import { CanFrame, BusStats } from '../types/can';
 
+export type StreamStatus = 'connected' | 'connecting' | 'disconnected' | 'error' | 'rejected';
+
+/** Server heartbeat of /ws/live: which producer feeds the stream and how many batches this client lost. */
+export interface StreamHeartbeat {
+  source: string;
+  dropped: number;
+}
+
+/** moto-server close codes of /ws/live: bad hello or token, and no token configured. Not retried. */
+const CLOSE_REJECTED = new Set([1008, 1011]);
+
 export interface WebSocketStreamOptions {
   url: string;
+  /** MOTO_API_TOKEN, sent in the first (hello) message, never in the URL. */
+  token: string;
   onFrame: (frame: CanFrame) => void;
   onStats?: (stats: Partial<BusStats>) => void;
-  onStatusChange?: (status: 'connected' | 'connecting' | 'disconnected' | 'error') => void;
+  onHeartbeat?: (heartbeat: StreamHeartbeat) => void;
+  onStatusChange?: (status: StreamStatus) => void;
 }
 
 export class WebSocketStreamClient {
@@ -29,6 +43,7 @@ export class WebSocketStreamClient {
       this.ws = new WebSocket(this.options.url);
 
       this.ws.onopen = () => {
+        this.ws?.send(JSON.stringify({ type: 'hello', token: this.options.token }));
         if (this.options.onStatusChange) {
           this.options.onStatusChange('connected');
         }
@@ -43,7 +58,13 @@ export class WebSocketStreamClient {
         }
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event) => {
+        if (CLOSE_REJECTED.has(event.code)) {
+          // Wrong token or a server without one: retrying would only repeat the refusal.
+          this.shouldReconnect = false;
+          if (this.options.onStatusChange) this.options.onStatusChange('rejected');
+          return;
+        }
         if (this.options.onStatusChange) {
           this.options.onStatusChange('disconnected');
         }
@@ -96,6 +117,7 @@ export class WebSocketStreamClient {
     const parsed = parseStreamMessage(msg);
     parsed.frames.forEach((f) => this.options.onFrame(f));
     if (parsed.stats && this.options.onStats) this.options.onStats(parsed.stats);
+    if (parsed.heartbeat && this.options.onHeartbeat) this.options.onHeartbeat(parsed.heartbeat);
   }
 }
 
@@ -148,11 +170,11 @@ function statsFromDto(raw: any): Partial<BusStats> | undefined {
 
 /**
  * Parses one WebSocket message of the moto-server stream protocol: a StreamMessageDto
- * envelope ({type, payload}) carrying a frame, a batch or stats. A bare StreamBatchDto
+ * envelope ({type, payload}) carrying a frame, a batch, stats or a heartbeat. A bare StreamBatchDto
  * or CanFrameDto is accepted too. Unknown or malformed content yields nothing.
  */
-export function parseStreamMessage(msg: unknown): { frames: CanFrame[]; stats?: Partial<BusStats> } {
-  const result: { frames: CanFrame[]; stats?: Partial<BusStats> } = { frames: [] };
+export function parseStreamMessage(msg: unknown): { frames: CanFrame[]; stats?: Partial<BusStats>; heartbeat?: StreamHeartbeat } {
+  const result: { frames: CanFrame[]; stats?: Partial<BusStats>; heartbeat?: StreamHeartbeat } = { frames: [] };
   if (!msg || typeof msg !== 'object') return result;
   const m: any = msg;
 
@@ -174,6 +196,8 @@ export function parseStreamMessage(msg: unknown): { frames: CanFrame[]; stats?: 
       handleBatch(m.payload);
     } else if (m.type === 'stats') {
       result.stats = statsFromDto(m.payload);
+    } else if (m.type === 'heartbeat' && typeof m.payload?.source === 'string') {
+      result.heartbeat = { source: m.payload.source, dropped: typeof m.payload.dropped === 'number' ? m.payload.dropped : 0 };
     }
     return result;
   }

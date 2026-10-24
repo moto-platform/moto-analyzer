@@ -15,7 +15,7 @@ import { CaptureStore } from './state/captureStore';
 import { useCapture } from './state/useCapture';
 import { VirtualCanBus } from './services/virtualBus';
 import { WebSerialCanAdapter } from './services/webSerialCan';
-import { WebSocketStreamClient } from './services/streamClient';
+import { StreamStatus, WebSocketStreamClient } from './services/streamClient';
 import { ThemeContext, useTheme } from './ui/theme';
 import { focusPanelFilter, useHotkeys } from './ui/keys';
 import { KeyBar, KeyHelp, type HelpGroup } from './ui/KeyBar';
@@ -25,8 +25,9 @@ const REPLAY_REBUILD_WINDOW = 2000;
 /** Longest real wait between two replayed frames (a gap in the log is not waited out). */
 const REPLAY_MAX_GAP_MS = 1000;
 const DEFAULT_WS_URL = 'ws://localhost:8000/ws/live';
+const WS_TOKEN_KEY = 'moto-analyzer.ws-token';
 
-export type WsStatus = 'connected' | 'connecting' | 'disconnected' | 'error';
+export type WsStatus = StreamStatus;
 
 export function App() {
   const [store] = useState(() => new CaptureStore(DEFS));
@@ -38,6 +39,15 @@ export function App() {
   const [usbRole, setUsbRole] = useState<BusRole>('vehicle');
   const [wsUrl, setWsUrl] = useState<string>(DEFAULT_WS_URL);
   const [wsStatus, setWsStatus] = useState<WsStatus>('disconnected');
+  // Per-tab convenience only: the token stays in sessionStorage, never in the URL or the repo.
+  const [wsToken, setWsToken] = useState<string>(() => {
+    try {
+      return sessionStorage.getItem(WS_TOKEN_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const [wsSource, setWsSource] = useState<string | null>(null);
   const [showAttitudeHud, setShowAttitudeHud] = useState<boolean>(true);
   const [msgPerSec, setMsgPerSec] = useState<number>(0);
   const [sourceError, setSourceError] = useState<string | null>(null);
@@ -93,12 +103,19 @@ export function App() {
           setIsRunning(false);
         });
       } else if (s === 'websocket') {
-        const client = new WebSocketStreamClient({ url: wsUrl, onFrame: ingest, onStatusChange: setWsStatus });
+        setWsSource(null);
+        const client = new WebSocketStreamClient({
+          url: wsUrl,
+          token: wsToken,
+          onFrame: ingest,
+          onStatusChange: setWsStatus,
+          onHeartbeat: (hb) => setWsSource(hb.source),
+        });
         webSocketRef.current = client;
         client.connect();
       }
     },
-    [virtualBus, ingest, usbRole, wsUrl]
+    [virtualBus, ingest, usbRole, wsUrl, wsToken]
   );
 
   // Start the default virtual source once; stop everything on unmount.
@@ -288,7 +305,7 @@ export function App() {
     source === 'virtual'
       ? `virtual bus ${isRunning ? 'running' : 'paused'}`
       : source === 'websocket'
-        ? `ws ${wsStatus}${isRunning ? '' : ', paused'}`
+        ? `ws ${wsStatus}${wsSource ? ` (${wsSource})` : ''}${isRunning ? '' : ', paused'}`
         : source === 'webserial'
           ? `usb can ${usbRole} bus${isRunning ? '' : ', paused'}`
           : `log replay ${isReplaying ? 'playing' : 'stopped'}`;
@@ -311,6 +328,16 @@ export function App() {
           onUsbRoleChange={setUsbRole}
           wsUrl={wsUrl}
           onWsUrlChange={setWsUrl}
+          wsToken={wsToken}
+          onWsTokenChange={(t) => {
+            setWsToken(t);
+            try {
+              sessionStorage.setItem(WS_TOKEN_KEY, t);
+            } catch {
+              // storage blocked: the token lives for this page only
+            }
+          }}
+          wsSource={wsSource}
           wsStatus={wsStatus}
           defsRef={DEFS.ref}
           customDbc={store.customPlatformDbc}
