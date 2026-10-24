@@ -105,9 +105,9 @@ export interface DbcCatalog {
   messages: DbcMessageDef[];
 }
 
-export type CockpitTab = 'trace' | 'sniffer' | 'oscilloscope' | 'uds' | 'health' | 'cluster' | 'sync';
+export type CockpitTab = 'trace' | 'sniffer' | 'oscilloscope' | 'uds' | 'health' | 'cluster' | 'sync' | 'session';
 export type TraceMode = 'overwrite' | 'scroll';
-export type TelemetrySource = 'virtual' | 'local_file' | 'websocket' | 'webserial';
+export type TelemetrySource = 'virtual' | 'local_file' | 'websocket' | 'webserial' | 'server_session';
 
 /** Bus a source's frames belong to: decides which defs catalog decodes them. */
 export type BusRole = 'vehicle' | 'platform';

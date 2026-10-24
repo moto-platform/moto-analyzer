@@ -12,6 +12,12 @@ export interface BusLoad {
   peakPct: number;
 }
 
+export interface RecordedMeta {
+  label: string;
+  group: string;
+  unit: string;
+}
+
 export interface SeriesPoint {
   time: number;
   value: number;
@@ -44,6 +50,8 @@ export class CaptureStore {
   /** Wall clock (performance.now, ms) when the newest frame arrived; 0 before the first. */
   public lastIngestWallMs = 0;
   public customPlatformDbc: string | null = null;
+  /** Label, group and unit of recorded session series that defs do not describe (sensor, derived). */
+  public recordedMeta = new Map<string, RecordedMeta>();
 
   private meter = new BusLoadMeter();
   private listeners = new Set<() => void>();
@@ -88,6 +96,23 @@ export class CaptureStore {
     if (frame.bus === 'vehicle' && this.monitor.isUdsId(frame.id)) this.monitor.process(frame);
 
     this.notify();
+  }
+
+  /**
+   * One recorded sample of a stored session (replay or "load all"). Pushes into the history
+   * like a decoded signal; no frame, log or bus-load side effects.
+   */
+  public ingestSample(key: string, time: number, value: number) {
+    this.pushPoint(key, time, value);
+    if (time > this.lastTime) this.lastTime = time;
+    this.lastIngestWallMs = performance.now();
+    this.dataVersion++;
+    this.notify();
+  }
+
+  /** Registers display metadata for a recorded key that defs do not describe. */
+  public setRecordedMeta(key: string, meta: RecordedMeta) {
+    this.recordedMeta.set(key, meta);
   }
 
   /** Trace names of the UDS IDs from uds/vehicle_cl250.yaml addressing. */
@@ -150,6 +175,7 @@ export class CaptureStore {
     this.dataVersion++;
     this.sniffer = new Map();
     this.history = new Map();
+    this.recordedMeta = new Map();
     this.busLoad = new Map();
     this.totalRx = 0;
     this.lastTime = 0;

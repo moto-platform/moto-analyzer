@@ -9,12 +9,16 @@ import { AttitudeGauge } from './components/AttitudeGauge';
 import { ReplayScrubber } from './components/ReplayScrubber';
 import { HealthPanel } from './components/HealthPanel';
 import { ClusterPanel } from './components/ClusterPanel';
+import { SessionPanel } from './components/SessionPanel';
+import { ReplayItem, framesToItems, mergeSamples } from './services/replay';
+import { DEFAULT_SERVER_URL, RecordedSeries, mapSeriesKey } from './services/sessionClient';
 import { BusRole, CanFrame, CockpitTab, TelemetrySource } from './types/can';
 import { DEFS } from './defs';
 import { CaptureStore } from './state/captureStore';
 import { useCapture } from './state/useCapture';
 import { VirtualCanBus } from './services/virtualBus';
 import { WebSerialCanAdapter } from './services/webSerialCan';
+import { didKey } from './services/pipeline';
 import { StreamStatus, WebSocketStreamClient } from './services/streamClient';
 import { ThemeContext, useTheme } from './ui/theme';
 import { focusPanelFilter, useHotkeys } from './ui/keys';
@@ -25,7 +29,10 @@ const REPLAY_REBUILD_WINDOW = 2000;
 /** Longest real wait between two replayed frames (a gap in the log is not waited out). */
 const REPLAY_MAX_GAP_MS = 1000;
 const DEFAULT_WS_URL = 'ws://localhost:8000/ws/live';
-const WS_TOKEN_KEY = 'moto-analyzer.ws-token';
+export const WS_TOKEN_KEY = 'moto-analyzer.ws-token';
+
+/** Sources that play through the replay transport. */
+const isReplaySource = (s: TelemetrySource) => s === 'local_file' || s === 'server_session';
 
 export type WsStatus = StreamStatus;
 
@@ -47,13 +54,22 @@ export function App() {
       return '';
     }
   });
+  const handleTokenChange = (t: string) => {
+    setWsToken(t);
+    try {
+      sessionStorage.setItem(WS_TOKEN_KEY, t);
+    } catch {
+      // storage blocked: the token lives for this page only
+    }
+  };
   const [wsSource, setWsSource] = useState<string | null>(null);
+  const [serverUrl, setServerUrl] = useState<string>(DEFAULT_SERVER_URL);
   const [showAttitudeHud, setShowAttitudeHud] = useState<boolean>(true);
   const [msgPerSec, setMsgPerSec] = useState<number>(0);
   const [sourceError, setSourceError] = useState<string | null>(null);
 
   // Time Machine replay
-  const [replayFrames, setReplayFrames] = useState<CanFrame[]>([]);
+  const [replayFrames, setReplayFrames] = useState<ReplayItem[]>([]);
   const [replayIndex, setReplayIndex] = useState<number>(0);
   const [isReplaying, setIsReplaying] = useState<boolean>(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
@@ -80,6 +96,14 @@ export function App() {
       }
     },
     [store]
+  );
+
+  const ingestItem = useCallback(
+    (item: ReplayItem) => {
+      if (item.kind === 'frame') ingest(item.frame);
+      else store.ingestSample(item.key, item.t, item.value);
+    },
+    [ingest, store]
   );
 
   const stopLiveSources = useCallback(() => {
@@ -127,7 +151,7 @@ export function App() {
   const setRunning = useCallback(
     (next: boolean) => {
       setIsRunning(next);
-      if (source === 'local_file') return;
+      if (isReplaySource(source)) return;
       if (next) startLiveSource(source);
       else stopLiveSources();
     },
@@ -145,9 +169,9 @@ export function App() {
     stopLiveSources();
     setIsReplaying(false);
     setSource(s);
-    if (s === 'local_file') {
+    if (s === 'local_file' || s === 'server_session') {
       setIsRunning(false);
-      setActiveTab('sync');
+      setActiveTab(s === 'local_file' ? 'sync' : 'session');
       return;
     }
     setIsRunning(true);
@@ -169,11 +193,39 @@ export function App() {
     setIsRunning(false);
     setIsReplaying(false);
     store.clear();
-    setReplayFrames(frames);
+    setReplayFrames(framesToItems(frames));
     setReplayIndex(0);
     replayIndexRef.current = 0;
     setSource('local_file');
     if (frames.length > 0) ingest(frames[0]);
+  };
+
+  /** Recorded session series -> replay items (or pushed at once). Display metadata goes to the store. */
+  const handleSessionLoaded = (series: RecordedSeries[], mode: 'replay' | 'all') => {
+    stopLiveSources();
+    setIsRunning(false);
+    setIsReplaying(false);
+    store.clear();
+    rxCounterRef.current = 0;
+    const perKey = series.map((sr) => {
+      const m = mapSeriesKey(sr.name, sr.kind);
+      if (!m.fromDefs) store.setRecordedMeta(m.key, { label: m.label, group: m.group, unit: sr.unit });
+      else if (!store.defs.vehicle.dids.some((d) => didKey(d.name) === m.key)) store.setRecordedMeta(m.key, { label: `DID ${m.label}`, group: 'session · DID (not in defs)', unit: sr.unit });
+      return { key: m.key, t: sr.tMs.map((ms) => ms / 1000), v: sr.v };
+    });
+    setSource('server_session');
+    if (mode === 'all') {
+      for (const s of perKey) for (let i = 0; i < s.t.length; i++) store.ingestSample(s.key, s.t[i], s.v[i]);
+      setReplayFrames([]);
+      setReplayIndex(0);
+      replayIndexRef.current = 0;
+      return;
+    }
+    const items = mergeSamples(perKey);
+    setReplayFrames(items);
+    setReplayIndex(0);
+    replayIndexRef.current = 0;
+    if (items.length > 0) ingestItem(items[0]);
   };
 
   // Each frame is scheduled after the recorded gap to the previous one, divided by the
@@ -186,12 +238,12 @@ export function App() {
     const step = () => {
       if (cancelled) return;
       let idx = replayIndexRef.current;
-      const startT = replayFrames[idx]?.timestamp ?? 0;
+      const startT = replayFrames[idx]?.t ?? 0;
       while (idx + 1 < replayFrames.length) {
-        const gapMs = ((replayFrames[idx + 1].timestamp - startT) * 1000) / playbackSpeed;
+        const gapMs = ((replayFrames[idx + 1].t - startT) * 1000) / playbackSpeed;
         if (gapMs > 4) break;
         idx += 1;
-        ingest(replayFrames[idx]);
+        ingestItem(replayFrames[idx]);
       }
       replayIndexRef.current = idx;
       setReplayIndex(idx);
@@ -201,7 +253,7 @@ export function App() {
       }
       const waitMs = Math.min(
         REPLAY_MAX_GAP_MS,
-        Math.max(0, ((replayFrames[idx + 1].timestamp - replayFrames[idx].timestamp) * 1000) / playbackSpeed)
+        Math.max(0, ((replayFrames[idx + 1].t - replayFrames[idx].t) * 1000) / playbackSpeed)
       );
       timer = setTimeout(() => {
         if (cancelled) return;
@@ -212,7 +264,7 @@ export function App() {
           return;
         }
         replayIndexRef.current = next;
-        ingest(replayFrames[next]);
+        ingestItem(replayFrames[next]);
         step();
       }, waitMs);
     };
@@ -222,7 +274,7 @@ export function App() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [isReplaying, replayFrames, playbackSpeed, ingest]);
+  }, [isReplaying, replayFrames, playbackSpeed, ingestItem]);
 
   // Forward seeks feed the skipped frames; backward seeks rebuild the views from a
   // window before the target, so no view keeps frames from "the future".
@@ -230,10 +282,10 @@ export function App() {
     if (index < 0 || index >= replayFrames.length) return;
     const current = replayIndexRef.current;
     if (index > current && index - current <= REPLAY_REBUILD_WINDOW) {
-      for (let i = current + 1; i <= index; i++) ingest(replayFrames[i]);
+      for (let i = current + 1; i <= index; i++) ingestItem(replayFrames[i]);
     } else if (index !== current) {
       store.clear();
-      for (let i = Math.max(0, index - REPLAY_REBUILD_WINDOW); i <= index; i++) ingest(replayFrames[i]);
+      for (let i = Math.max(0, index - REPLAY_REBUILD_WINDOW); i <= index; i++) ingestItem(replayFrames[i]);
     }
     replayIndexRef.current = index;
     setReplayIndex(index);
@@ -261,8 +313,8 @@ export function App() {
     return () => clearInterval(interval);
   }, [store]);
 
-  const currentReplayTime = replayFrames[replayIndex]?.timestamp ?? 0;
-  const totalReplayDuration = replayFrames[replayFrames.length - 1]?.timestamp ?? 0;
+  const currentReplayTime = replayFrames[replayIndex]?.t ?? 0;
+  const totalReplayDuration = replayFrames[replayFrames.length - 1]?.t ?? 0;
   const canTransmit = source === 'virtual' && isRunning;
 
   // ------------------------------------------------------------ theme and keys
@@ -270,11 +322,11 @@ export function App() {
   const { theme, toggleTheme } = useTheme();
   const [showKeys, setShowKeys] = useState<boolean>(false);
   const mainRef = useRef<HTMLElement>(null);
-  const hasReplay = source === 'local_file' || replayFrames.length > 0;
+  const hasReplay = isReplaySource(source) || replayFrames.length > 0;
 
   // In log replay, space drives the replay transport instead of the live source.
   const togglePause = () => {
-    if (source === 'local_file') {
+    if (isReplaySource(source)) {
       if (replayFrames.length > 0) setIsReplaying(!isReplaying);
     } else {
       setRunning(!isRunning);
@@ -292,6 +344,7 @@ export function App() {
           h: () => setActiveTab('health'),
           f: () => setActiveTab('cluster'),
           d: () => setActiveTab('sync'),
+          e: () => setActiveTab('session'),
           ' ': togglePause,
           c: handleClear,
           x: () => setShowAttitudeHud((v) => !v),
@@ -308,7 +361,9 @@ export function App() {
         ? `ws ${wsStatus}${wsSource ? ` (${wsSource})` : ''}${isRunning ? '' : ', paused'}`
         : source === 'webserial'
           ? `usb can ${usbRole} bus${isRunning ? '' : ', paused'}`
-          : `log replay ${isReplaying ? 'playing' : 'stopped'}`;
+          : source === 'server_session'
+            ? `session replay ${isReplaying ? 'playing' : 'stopped'}`
+            : `log replay ${isReplaying ? 'playing' : 'stopped'}`;
 
   return (
     <ThemeContext.Provider value={theme}>
@@ -329,14 +384,7 @@ export function App() {
           wsUrl={wsUrl}
           onWsUrlChange={setWsUrl}
           wsToken={wsToken}
-          onWsTokenChange={(t) => {
-            setWsToken(t);
-            try {
-              sessionStorage.setItem(WS_TOKEN_KEY, t);
-            } catch {
-              // storage blocked: the token lives for this page only
-            }
-          }}
+          onWsTokenChange={handleTokenChange}
           wsSource={wsSource}
           wsStatus={wsStatus}
           defsRef={DEFS.ref}
@@ -379,7 +427,16 @@ export function App() {
             )}
             {activeTab === 'health' && <HealthPanel store={store} />}
             {activeTab === 'cluster' && (
-              <ClusterPanel store={store} clockRate={source === 'local_file' ? (isReplaying ? playbackSpeed : 0) : isRunning ? 1 : 0} />
+              <ClusterPanel store={store} clockRate={isReplaySource(source) ? (isReplaying ? playbackSpeed : 0) : isRunning ? 1 : 0} />
+            )}
+            {activeTab === 'session' && (
+              <SessionPanel
+                token={wsToken}
+                onTokenChange={handleTokenChange}
+                serverUrl={serverUrl}
+                onServerUrlChange={setServerUrl}
+                onLoad={handleSessionLoaded}
+              />
             )}
             {activeTab === 'sync' && <SyncPanel store={store} onLogLoaded={handleLogLoaded} />}
           </main>
@@ -405,6 +462,7 @@ export function App() {
             onStepForward={() => seekTo(replayIndexRef.current + 1)}
             onStepBackward={() => seekTo(replayIndexRef.current - 1)}
             onRestart={() => seekTo(0)}
+            itemLabel={source === 'server_session' ? 'sample' : 'frame'}
           />
         )}
 
@@ -412,7 +470,7 @@ export function App() {
           keys={[
             { k: '?', label: 'Keys' },
             { k: '/', label: 'Filter' },
-            { k: 'space', label: source === 'local_file' ? (isReplaying ? 'Pause replay' : 'Play replay') : isRunning ? 'Pause' : 'Run' },
+            { k: 'space', label: isReplaySource(source) ? (isReplaying ? 'Pause replay' : 'Play replay') : isRunning ? 'Pause' : 'Run' },
             { k: 'C', label: 'Clear' },
             { k: 'X', label: 'HUD' },
             { k: 'L', label: theme === 'dark' ? 'Light' : 'Dark' },
@@ -444,6 +502,7 @@ const HELP: HelpGroup[] = [
       { k: 'H', label: 'Health' },
       { k: 'F', label: 'Cluster' },
       { k: 'D', label: 'Defs & logs' },
+      { k: 'E', label: 'Recorded sessions' },
     ],
   },
   {

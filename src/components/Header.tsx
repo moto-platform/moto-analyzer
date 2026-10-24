@@ -42,11 +42,13 @@ export const TABS: { id: CockpitTab; key: string; label: string }[] = [
   { id: 'health', key: 'H', label: 'Health' },
   { id: 'cluster', key: 'F', label: 'Cluster' },
   { id: 'sync', key: 'D', label: 'Defs & logs' },
+  { id: 'session', key: 'E', label: 'Sessions' },
 ];
 
 const SOURCES: { value: TelemetrySource; label: string; title: string }[] = [
   { value: 'virtual', label: 'Virtual bus', title: 'Simulated CL250 vehicle bus + platform bus' },
   { value: 'local_file', label: 'Log replay', title: 'Replay an .asc or .csv log' },
+  { value: 'server_session', label: 'Session', title: 'Recorded moto-server session (read-only HTTP)' },
   { value: 'websocket', label: 'WS live', title: 'moto-server live stream' },
   { value: 'webserial', label: 'USB CAN', title: 'SLCAN adapter, opened listen-only' },
 ];
@@ -62,7 +64,7 @@ const Group: React.FC<{ children: React.ReactNode; className?: string }> = ({ ch
 
 export const Header: React.FC<HeaderProps> = (p) => {
   const buses = [...p.busLoad.entries()].sort(([a], [b]) => a.localeCompare(b));
-  const replay = p.source === 'local_file';
+  const replay = p.source === 'local_file' || p.source === 'server_session';
 
   return (
     <header className="shrink-0 select-none">

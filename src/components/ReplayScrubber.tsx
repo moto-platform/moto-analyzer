@@ -14,6 +14,8 @@ interface ReplayScrubberProps {
   onStepForward: () => void;
   onStepBackward: () => void;
   onRestart: () => void;
+  /** Noun for the position counter: frames of a log, samples of a session. */
+  itemLabel?: string;
 }
 
 const SPEEDS = [0.25, 0.5, 1.0, 2.0, 5.0];
@@ -38,6 +40,7 @@ export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
   onStepForward,
   onStepBackward,
   onRestart,
+  itemLabel = 'frame',
 }) => (
   <div className="flex h-tool shrink-0 select-none items-center gap-[22px] whitespace-nowrap border-t border-term-rule bg-term-raise px-[14px]">
     <span className="text-term-dim">replay</span>
@@ -78,7 +81,7 @@ export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
     </span>
 
     <span className="text-term-dim">
-      frame <span className="text-term-hi">{totalFrames > 0 ? currentIndex + 1 : 0}</span> / {totalFrames}
+      {itemLabel} <span className="text-term-hi">{totalFrames > 0 ? currentIndex + 1 : 0}</span> / {totalFrames}
     </span>
   </div>
 );
