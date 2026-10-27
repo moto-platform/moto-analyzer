@@ -1,12 +1,12 @@
-# moto-analyzer roadmap
+# vehicle-analyzer roadmap
 
-Live task list of the analyzer (2026-10-24). Scope: D-081. Layer split: D-085. Background (market benchmark, functional inventory): `external/moto-vehicle-defs/docs/ideas/can-analyzer-master-plan.md` §2-3; its task list is superseded by this file.
+Live task list of the analyzer (2026-10-24). Scope: D-081. Layer split: D-085. Background (market benchmark, functional inventory): `external/vehicle-defs/docs/ideas/can-analyzer-master-plan.md` §2-3; its task list is superseded by this file.
 
 ## Boundary (D-085)
 
 The analyzer is the developer's engineering tool. It shows frames, decoded signals, UDS, E2E, timing and recorded sessions, and interprets nothing.
 
-- No LLM, no fault-catalog matching, no rider wording. Those belong to moto-mcp (tools) and the rider layer (Q-037).
+- No LLM, no fault-catalog matching, no rider wording. Those belong to vehicle-mcp (tools) and the rider layer (Q-037).
 - It never transmits on a vehicle bus (invariant 1); the UDS composer reaches only the simulated ECU.
 - It decodes only from the pinned defs (invariant 2).
 
@@ -22,8 +22,8 @@ The analyzer is the developer's engineering tool. It shows frames, decoded signa
 | HUD | cornering level from 0x023; UNAVAILABLE without a fresh, E2E-valid status |
 | Cluster (A1, analyzer#13) | key **F**: tach, speed, coolant / battery / throttle, lean, telltales (cornering level, BSM, immobilizer, ECU present), node heartbeats; every readout from a defs name, "no data" or STALE (`E2E_TIMEOUT_CYCLES` x DBC cycle) instead of a guessed value; cornering UNAVAILABLE without a fresh frame |
 | Sources | virtual bus (simulated CL250 + platform bus), log replay, SLCAN listen-only, WebSocket client (`StreamMessageDto`) |
-| Live source (A2, server#24 + analyzer#14) | moto-server `/ws/live`: first message `hello` with the token (header token field, sessionStorage only, never in the URL), `batch` envelopes, `heartbeat` every 5 s with `source` and `dropped`; 1008/1011 closes are not retried; the header shows `source mock` in amber. Server side: per-client ring of 256 batches (drop oldest), `MOTO_LIVE_SOURCE=mock` (default `none`); the real source (rt-core via the Raspi, D-077) is still open |
-| Recorded sessions (A3) | key **E**, source `Session`: `GET /sessions`, `/sessions/{id}/report` summary and `/sessions/{id}/series` (max 2000 points) from moto-server; the token goes in the `Authorization` header only (shared sessionStorage field, never a URL). `did.<NAME>` series land on the live DID key (defs units), `sensor.*` / `derived.*` as `session · sensor` / `session · derived` channels with the response unit. **Open** replays through the transport (time-ordered samples), **Load all** pushes everything for static inspection |
+| Live source (A2, server#24 + analyzer#14) | vehicle-server `/ws/live`: first message `hello` with the token (header token field, sessionStorage only, never in the URL), `batch` envelopes, `heartbeat` every 5 s with `source` and `dropped`; 1008/1011 closes are not retried; the header shows `source mock` in amber. Server side: per-client ring of 256 batches (drop oldest), `VEHICLE_LIVE_SOURCE=mock` (default `none`); the real source (rt-core via the Raspi, D-077) is still open |
+| Recorded sessions (A3) | key **E**, source `Session`: `GET /sessions`, `/sessions/{id}/report` summary and `/sessions/{id}/series` (max 2000 points) from vehicle-server; the token goes in the `Authorization` header only (shared sessionStorage field, never a URL). `did.<NAME>` series land on the live DID key (defs units), `sensor.*` / `derived.*` as `session · sensor` / `session · derived` channels with the response unit. **Open** replays through the transport (time-ordered samples), **Load all** pushes everything for static inspection |
 | Session comparison (A4) | key **A**: pick sessions A and B (same server URL / token fields), a channel present in both with the same unit, axis time or distance; overlay of A and B plus the difference B - A as SVG; **Export CSV** (key V): `# A=..; B=..; channel=..; unit=..; axis=..` comment line, then `axis,A,B,B_minus_A`. Both series are linearly interpolated onto a 500-point grid over the overlap of their ranges (the server's min/max samples as they are; no extrapolation; null across a gap longer than 5x the median sample spacing; the difference is null where either side is). Time axis = seconds since each session's own t0; distance axis = `derived.trip_distance` (km) and is disabled with the reason when either session lacks it. Position-like channels (latitude / longitude) are refused. Pure logic in `src/services/compare.ts` |
 | Quality | 116 vitest tests, CI on push and PR (analyzer#10) |
 

@@ -30,7 +30,7 @@ const REPLAY_REBUILD_WINDOW = 2000;
 /** Longest real wait between two replayed frames (a gap in the log is not waited out). */
 const REPLAY_MAX_GAP_MS = 1000;
 const DEFAULT_WS_URL = 'ws://localhost:8000/ws/live';
-export const WS_TOKEN_KEY = 'moto-analyzer.ws-token';
+export const WS_TOKEN_KEY = 'vehicle-analyzer.ws-token';
 
 /** Sources that play through the replay transport. */
 const isReplaySource = (s: TelemetrySource) => s === 'local_file' || s === 'server_session';

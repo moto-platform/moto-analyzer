@@ -1,6 +1,6 @@
 import { CanFrame } from '../types/can';
 
-/** ASC channel numbers follow the moto-server convention: 1 = vehicle bus, 2 = platform bus. */
+/** ASC channel numbers follow the vehicle-server convention: 1 = vehicle bus, 2 = platform bus. */
 export function busToAscChannel(bus: string): number {
   if (bus === 'vehicle') return 1;
   if (bus === 'platform') return 2;
@@ -83,7 +83,7 @@ export function exportToJson(frames: CanFrame[]): string {
   return JSON.stringify(
     {
       exportedAt: new Date().toISOString(),
-      platform: 'moto-platform',
+      platform: 'vehicle-platform',
       frameCount: frames.length,
       frames: frames.map((f) => ({
         timestamp: f.timestamp,

@@ -14,7 +14,7 @@ interface SessionPanelProps {
   onLoad: (series: RecordedSeries[], mode: 'replay' | 'all') => void;
 }
 
-/** Browser for recorded moto-server sessions (read-only HTTP, token in the Authorization header only). */
+/** Browser for recorded vehicle-server sessions (read-only HTTP, token in the Authorization header only). */
 export const SessionPanel: React.FC<SessionPanelProps> = ({ token, onTokenChange, serverUrl, onServerUrlChange, onLoad }) => {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -81,13 +81,13 @@ export const SessionPanel: React.FC<SessionPanelProps> = ({ token, onTokenChange
   return (
     <div className="flex h-full select-none flex-col bg-term-bg">
       <Toolbar>
-        <TermInput value={serverUrl} onChange={(e) => onServerUrlChange(e.target.value)} aria-label="moto-server URL" spellCheck={false} className="w-64" />
+        <TermInput value={serverUrl} onChange={(e) => onServerUrlChange(e.target.value)} aria-label="vehicle-server URL" spellCheck={false} className="w-64" />
         <TermInput
           type="password"
           value={token}
           onChange={(e) => onTokenChange(e.target.value)}
           placeholder="token"
-          aria-label="moto-server API token"
+          aria-label="vehicle-server API token"
           autoComplete="off"
           className="w-32 min-w-0"
         />

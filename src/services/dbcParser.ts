@@ -4,7 +4,7 @@ import { DbcCatalog, DbcMessageDef, DbcSignalDef } from '../types/can';
  * In-browser DBC parser: VERSION, BU_, BO_, SG_, CM_ (BU_/BO_/SG_), BA_DEF_DEF_ / BA_
  * (GenMsgCycleTime, E2E_Protected, E2E_DataID, NodeId) and VAL_.
  * The analyzer has no built-in catalog: signals come only from a DBC (Invariant 2),
- * normally the pinned moto-vehicle-defs copy (src/defs).
+ * normally the pinned vehicle-defs copy (src/defs).
  */
 export function parseDbc(dbcText: string): DbcCatalog {
   const text = dbcText.replace(/\r\n/g, '\n');

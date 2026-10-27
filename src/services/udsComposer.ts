@@ -1,7 +1,7 @@
 import { Defs } from '../defs/model';
 
 /**
- * UDS request checks and composition, driven by moto-vehicle-defs
+ * UDS request checks and composition, driven by vehicle-defs
  * (uds/vehicle_cl250.yaml -> tester_policy, uds/iso14229.yaml names).
  *
  * The analyzer is not a tester on the vehicle bus (Invariant 1: one tester, rt-core).

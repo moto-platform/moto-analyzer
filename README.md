@@ -1,6 +1,6 @@
-# moto-analyzer
+# vehicle-analyzer
 
-Real-time CAN bus analyzer and telemetry cockpit (Web Host & Cross-Platform Desktop) for the [`moto-platform`](https://github.com/moto-platform) motorcycle SDV diagnostics & telemetry architecture.
+Real-time CAN bus analyzer and telemetry cockpit (Web Host & Cross-Platform Desktop) for the [`vehicle-platform`](https://github.com/vehicle-platform) motorcycle SDV diagnostics & telemetry architecture.
 
 Benchmarked against automotive OEM and open-source standards: **Vector CANalyzer**, **SavvyCAN**, **Cabana**, and **Foxglove Studio**.
 
@@ -8,7 +8,7 @@ Benchmarked against automotive OEM and open-source standards: **Vector CANalyzer
 
 ## Features
 
-Every CAN ID, signal, scaling, cycle time, E2E DataID, DID, UDS address and tester rule comes from the pinned [`moto-vehicle-defs`](https://github.com/moto-platform/moto-vehicle-defs) copy in `external/moto-vehicle-defs` (Invariant 2). The analyzer has no built-in signal catalog.
+Every CAN ID, signal, scaling, cycle time, E2E DataID, DID, UDS address and tester rule comes from the pinned [`vehicle-defs`](https://github.com/vehicle-platform/vehicle-defs) copy in `external/vehicle-defs` (Invariant 2). The analyzer has no built-in signal catalog.
 
 - **Trace:** overwrite view per bus and ID (period, frequency, count, changed bytes, E2E status, decoded signals with value-table names) and a chronological log; pause-on-ID trigger; export to Vector ASC, CSV and JSON.
 - **Sniffer:** byte heatmap (up, down, direction reversal, static), notch filter, flow view and bit-flip classes by flip rate.
@@ -16,29 +16,29 @@ Every CAN ID, signal, scaling, cycle time, E2E DataID, DID, UDS address and test
 - **UDS observer:** passive decoding of the tester's ISO 14229 conversation on the vehicle bus (ISO-TP reassembly, request/response pairing, DID values with stale state, DTCs with status bits, NRC names), alerts for a request outside `tester_policy` or a functional request (a second tester). The request composer sends only to the simulated ECU.
 - **Health:** the D-079 window entry conditions (W1-W5) evaluated on the observed inputs, the E2E supervisor of the platform bus (CRC-8/SAE-J1850, alive counter, timeout) and node heartbeats.
 - **Cluster (key F):** instrument cluster (tach, speed, coolant, battery, throttle, lean, telltales, node heartbeats) built only from defs signal names. A missing input shows "no data" and an old one STALE, never a guessed value; the cornering telltale shows UNAVAILABLE without a fresh frame.
-- **Sources:** virtual bus (simulated CL250 vehicle bus with the UDS conversation, platform bus with E2E), log replay at recorded timing, recorded moto-server sessions (read-only HTTP), the moto-server live stream (`/ws/live`, `StreamMessageDto`), and USB SLCAN adapters opened listen-only.
-- **Recorded sessions (key E):** pick a stored moto-server session (server URL and token fields; the token is sent in the `Authorization` header only), see its report summary, then **Open** to replay the series through the replay transport or **Load all** to inspect them in the oscilloscope. DIDs show with defs units; sensor and derived series appear as `session · sensor` / `session · derived` channels.
+- **Sources:** virtual bus (simulated CL250 vehicle bus with the UDS conversation, platform bus with E2E), log replay at recorded timing, recorded vehicle-server sessions (read-only HTTP), the vehicle-server live stream (`/ws/live`, `StreamMessageDto`), and USB SLCAN adapters opened listen-only.
+- **Recorded sessions (key E):** pick a stored vehicle-server session (server URL and token fields; the token is sent in the `Authorization` header only), see its report summary, then **Open** to replay the series through the replay transport or **Load all** to inspect them in the oscilloscope. DIDs show with defs units; sensor and derived series appear as `session · sensor` / `session · derived` channels.
 - **Compare (key A):** choose two recorded sessions and a channel they share (same unit); the overlay and the difference B - A are drawn on a common time axis (seconds since each session start) or, when both sessions have `derived.trip_distance`, a distance axis (km). Interpolation is linear inside each series only; gaps and non-overlap stay blank. Export CSV (`axis,A,B,B_minus_A`) names the session IDs, channel, unit and axis; position channels are never compared or exported.
-- **Live stream:** the client sends a `hello` with the token entered in the header's token field (kept in sessionStorage, never in the URL); a rejected token (close 1008/1011) is not retried. The header shows the server's `source` from its heartbeat; `source mock` (server started with `MOTO_LIVE_SOURCE=mock`) is shown in amber so synthetic data is not mistaken for a real bus.
+- **Live stream:** the client sends a `hello` with the token entered in the header's token field (kept in sessionStorage, never in the URL); a rejected token (close 1008/1011) is not retried. The header shows the server's `source` from its heartbeat; `source mock` (server started with `VEHICLE_LIVE_SOURCE=mock`) is shown in amber so synthetic data is not mistaken for a real bus.
 
 ## Quick start
 
 Requires Node.js 18+.
 
 ```bash
-git submodule update --init      # external/moto-vehicle-defs at the pinned tag
+git submodule update --init      # external/vehicle-defs at the pinned tag
 npm install
 npm run dev                      # http://localhost:5173
 npm test                         # vitest
 npm run build
 ```
 
-To move to a newer defs tag: `git -C external/moto-vehicle-defs fetch --tags && git -C external/moto-vehicle-defs checkout vX.Y.Z`, run the tests, commit the submodule pointer and record the combination in `moto-workspace/manifest.yaml`.
+To move to a newer defs tag: `git -C external/vehicle-defs fetch --tags && git -C external/vehicle-defs checkout vX.Y.Z`, run the tests, commit the submodule pointer and record the combination in `vehicle-workspace/manifest.yaml`.
 
 ## Architecture
 
 ```
-external/moto-vehicle-defs ──► src/defs        (DBC + YAML -> typed Defs, bundled at build time)
+external/vehicle-defs ──► src/defs        (DBC + YAML -> typed Defs, bundled at build time)
 sources (virtual bus, log replay, WebSocket, SLCAN)
         │ raw frames + bus role (vehicle | platform)
         ▼
@@ -55,10 +55,10 @@ src/components/*           Trace, Sniffer, Oscilloscope, UDS, Health, Defs & Log
 - **Invariant 1:** the analyzer never transmits on a vehicle bus. SLCAN adapters open in listen-only mode (`L`); the UDS composer only reaches the simulated ECU.
 - **Invariant 2:** decoding uses only the pinned defs. Loading another DBC is possible for analysis and is shown as "custom DBC" in the header.
 - **Safety outputs:** the HUD shows the cornering level the safety partition sent (0x023); without a fresh, E2E-valid status it shows UNAVAILABLE, never GREEN.
-- **Not** `moto-mcp` (LLM tools) and **not** `moto-ml` (training).
+- **Not** `vehicle-mcp` (LLM tools) and **not** `vehicle-ml` (training).
 
 ---
 
 ## License
 
-MIT, see [LICENSE](LICENSE) (D-036). Copyright (c) 2026 The moto-platform authors.
+MIT, see [LICENSE](LICENSE) (D-036). Copyright (c) 2026 The vehicle-platform authors.

@@ -7,7 +7,7 @@ import { checkTesterPolicy } from './udsComposer';
 /**
  * Simulated CL250 + platform buses for development without hardware.
  *
- * Everything on the wire follows moto-vehicle-defs: platform frames are packed from
+ * Everything on the wire follows vehicle-defs: platform frames are packed from
  * platform.dbc (IDs, layouts, cycle times, E2E DataIDs), the vehicle bus carries the
  * UDS conversation of uds/vehicle_cl250.yaml (addressing, session start, tester
  * present, DID poll periods, formulas). Only the physics are made up, and they are

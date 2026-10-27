@@ -1,5 +1,5 @@
 /**
- * Platform E2E profile (moto-vehicle-defs docs/e2e-profile.md), receiver side, for
+ * Platform E2E profile (vehicle-defs docs/e2e-profile.md), receiver side, for
  * observing the platform bus. Byte 0 = CRC-8/SAE-J1850 over (DataID low, DataID high,
  * bytes 1..DLC-1); byte 1 bits 0-3 = alive counter 0..15. Timeout = 3 x cycle time,
  * max delta counter = 1.

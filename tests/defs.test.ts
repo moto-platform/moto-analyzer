@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { DEFS, decodeDid, encodeDid } from '../src/defs';
 
-describe('pinned moto-vehicle-defs', () => {
+describe('pinned vehicle-defs', () => {
   it('loads the platform DBC with cycle times, E2E data IDs and value tables', () => {
     const lean = DEFS.platform.messages.find((m) => m.id === 0x020)!;
     expect(lean.name).toBe('EkfLean');

@@ -8,12 +8,12 @@ export interface StreamHeartbeat {
   dropped: number;
 }
 
-/** moto-server close codes of /ws/live: bad hello or token, and no token configured. Not retried. */
+/** vehicle-server close codes of /ws/live: bad hello or token, and no token configured. Not retried. */
 const CLOSE_REJECTED = new Set([1008, 1011]);
 
 export interface WebSocketStreamOptions {
   url: string;
-  /** MOTO_API_TOKEN, sent in the first (hello) message, never in the URL. */
+  /** VEHICLE_API_TOKEN, sent in the first (hello) message, never in the URL. */
   token: string;
   onFrame: (frame: CanFrame) => void;
   onStats?: (stats: Partial<BusStats>) => void;
@@ -121,7 +121,7 @@ export class WebSocketStreamClient {
   }
 }
 
-/** moto-server channel index (CanFrameDto.channel): 1 = vehicle bus, 2 = platform bus. */
+/** vehicle-server channel index (CanFrameDto.channel): 1 = vehicle bus, 2 = platform bus. */
 export function channelToBus(channel: unknown): string {
   if (channel === 1) return 'vehicle';
   if (channel === 2) return 'platform';
@@ -136,7 +136,7 @@ function hexToBytes(hex: string): number[] | null {
   return out;
 }
 
-/** Converts one moto-server CanFrameDto (schemas/stream.py) into a CanFrame. */
+/** Converts one vehicle-server CanFrameDto (schemas/stream.py) into a CanFrame. */
 export function frameFromDto(raw: any): CanFrame | null {
   if (!raw || typeof raw !== 'object' || typeof raw.id !== 'number') return null;
   const data = typeof raw.data_hex === 'string' ? hexToBytes(raw.data_hex) : null;
@@ -169,7 +169,7 @@ function statsFromDto(raw: any): Partial<BusStats> | undefined {
 }
 
 /**
- * Parses one WebSocket message of the moto-server stream protocol: a StreamMessageDto
+ * Parses one WebSocket message of the vehicle-server stream protocol: a StreamMessageDto
  * envelope ({type, payload}) carrying a frame, a batch, stats or a heartbeat. A bare StreamBatchDto
  * or CanFrameDto is accepted too. Unknown or malformed content yields nothing.
  */
