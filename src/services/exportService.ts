@@ -25,7 +25,7 @@ export function exportToVectorAsc(frames: CanFrame[]): string {
     `base hex  timestamps absolute`,
     `internal events logged`,
     `Begin TriggerBlock ${dateStr}`,
-    `// MOTO ANALYZER - Vector ASC Export`,
+    `// VEHICLE ANALYZER - Vector ASC Export`,
     `// Total Frames: ${frames.length}`,
     `------------------------------------------------------------------`,
   ];
