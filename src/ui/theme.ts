@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 export type Theme = 'dark' | 'light';
 
 /** localStorage key; index.html reads the same key before first paint. */
-export const THEME_STORAGE_KEY = 'moto-analyzer.theme';
+export const THEME_STORAGE_KEY = 'vehicle-analyzer.theme';
 
 function readStored(): Theme | null {
   try {

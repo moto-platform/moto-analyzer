@@ -1,5 +1,5 @@
 /**
- * Math Channels & Telemetry Signal Calculus Service for moto-analyzer
+ * Math Channels & Telemetry Signal Calculus Service for vehicle-analyzer
  *
  * Provides host-side math channels (derivative, difference, product, ratio)
  * and oscilloscope telemetry export (CSV & branded snapshot).
@@ -8,7 +8,7 @@
 /**
  * Host-side analysis channels computed from captured series (CANalyzer-style math).
  * They are not platform signals: derived vehicle signals are defined in
- * moto-vehicle-defs (derived/) and computed on rt-core / moto-server.
+ * vehicle-defs (derived/) and computed on rt-core / vehicle-server.
  */
 export type MathOp = 'derivative' | 'difference' | 'product' | 'ratio';
 
@@ -186,7 +186,7 @@ export function captureBrandedSnapshot(
   // Branding text
   ctx.fillStyle = colors.title;
   ctx.font = `600 12px ${colors.font}`;
-  ctx.fillText('moto-analyzer oscilloscope', 14, 23);
+  ctx.fillText('vehicle-analyzer oscilloscope', 14, 23);
 
   ctx.fillStyle = colors.text;
   ctx.font = `11px ${colors.font}`;
@@ -203,7 +203,7 @@ export function captureBrandedSnapshot(
 
   ctx.fillStyle = colors.faint;
   ctx.font = `10px ${colors.font}`;
-  ctx.fillText(metadata.footer ?? 'moto-analyzer snapshot', 14, offscreen.height - 6);
+  ctx.fillText(metadata.footer ?? 'vehicle-analyzer snapshot', 14, offscreen.height - 6);
 
   return offscreen.toDataURL('image/png');
 }

@@ -44,7 +44,7 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, onLogLoaded }) => {
       }
       store.setPlatformCatalog(parsed, file.name);
       setSelection({ kind: 'msg', id: parsed[0].id });
-      setStatus(`Decoding the platform bus with ${file.name} (${parsed.length} messages). This is not moto-vehicle-defs.`);
+      setStatus(`Decoding the platform bus with ${file.name} (${parsed.length} messages). This is not vehicle-defs.`);
     });
   };
 
@@ -91,7 +91,7 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, onLogLoaded }) => {
     <div className="flex h-full select-none flex-col bg-term-bg">
       <Toolbar>
         <span>
-          <span className="font-semibold text-term-hi">moto-vehicle-defs {defs.ref}</span>{' '}
+          <span className="font-semibold text-term-hi">vehicle-defs {defs.ref}</span>{' '}
           <span className="text-term-dim">
             platform.dbc{defs.platform.version && ` (VERSION "${defs.platform.version}")`} · cl250.dbc · uds/vehicle_cl250.yaml
           </span>
@@ -154,7 +154,7 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, onLogLoaded }) => {
               load .asc or .csv
             </TermButton>
             <input ref={logInput} type="file" accept=".asc,.csv" onChange={handleLogUpload} className="hidden" tabIndex={-1} />
-            <Note className="mt-1 px-[8px] text-term-faint">ASC channel 1 = vehicle bus, 2 = platform bus (moto-server convention).</Note>
+            <Note className="mt-1 px-[8px] text-term-faint">ASC channel 1 = vehicle bus, 2 = platform bus (vehicle-server convention).</Note>
           </div>
         </nav>
 

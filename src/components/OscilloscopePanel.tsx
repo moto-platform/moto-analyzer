@@ -297,7 +297,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `moto-analyzer-scope-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+    a.download = `vehicle-analyzer-scope-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -320,7 +320,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
     });
     const a = document.createElement('a');
     a.href = url;
-    a.download = `moto-analyzer-scope-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+    a.download = `vehicle-analyzer-scope-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
     a.click();
   };
 
@@ -476,7 +476,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
           <TermButton boxed onClick={addMath}>
             add math channel
           </TermButton>
-          <span className="italic text-term-dim">Analysis only, not a platform signal (derived signals live in moto-vehicle-defs).</span>
+          <span className="italic text-term-dim">Analysis only, not a platform signal (derived signals live in vehicle-defs).</span>
         </div>
       )}
 

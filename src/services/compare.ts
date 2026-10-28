@@ -1,7 +1,7 @@
 import type { RecordedSeries, SeriesResponse } from './sessionClient';
 
 /**
- * Session comparison (roadmap A4): two recorded moto-server sessions on a common time or
+ * Session comparison (roadmap A4): two recorded vehicle-server sessions on a common time or
  * distance axis, overlay and difference (B - A) per channel. Pure functions, no React.
  *
  * Value used: the points of the series response as they are. The server downsamples with

@@ -3,8 +3,8 @@ import { DbcCatalog } from '../types/can';
 import { parseDbc } from '../services/dbcParser';
 
 /**
- * Typed view of the moto-vehicle-defs files the analyzer reads. Everything here is
- * built from the pinned defs copy (external/moto-vehicle-defs); nothing is hard-coded
+ * Typed view of the vehicle-defs files the analyzer reads. Everything here is
+ * built from the pinned defs copy (external/vehicle-defs); nothing is hard-coded
  * (Invariant 2). The builder takes the file texts so tests can feed fixtures.
  */
 
@@ -91,7 +91,7 @@ export interface CorneringLimits {
 }
 
 export interface Defs {
-  /** Tag (or commit) of the pinned moto-vehicle-defs copy. */
+  /** Tag (or commit) of the pinned vehicle-defs copy. */
   ref: string;
   platform: DbcCatalog;
   vehicleDbc: DbcCatalog;

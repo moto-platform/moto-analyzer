@@ -3,9 +3,9 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { execSync } from 'node:child_process';
 
-/** Tag (or short commit) of the pinned moto-vehicle-defs submodule, shown in the UI. */
+/** Tag (or short commit) of the pinned vehicle-defs submodule, shown in the UI. */
 function defsRef(): string {
-  const cwd = 'external/moto-vehicle-defs';
+  const cwd = 'external/vehicle-defs';
   for (const cmd of ['git describe --tags --exact-match', 'git rev-parse --short HEAD']) {
     try {
       return execSync(cmd, { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();

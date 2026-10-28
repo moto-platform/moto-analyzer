@@ -1,7 +1,7 @@
 import { didKey } from './pipeline';
 
 /**
- * Read-only HTTP client for recorded moto-server sessions (roadmap A3). The API token goes in
+ * Read-only HTTP client for recorded vehicle-server sessions (roadmap A3). The API token goes in
  * the Authorization header only, never in a URL or query string.
  */
 

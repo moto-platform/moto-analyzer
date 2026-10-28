@@ -71,7 +71,7 @@ const Plot: React.FC<{
   );
 };
 
-/** Compare two recorded moto-server sessions on a common time or distance axis (roadmap A4). */
+/** Compare two recorded vehicle-server sessions on a common time or distance axis (roadmap A4). */
 export const ComparePanel: React.FC<ComparePanelProps> = ({ token, onTokenChange, serverUrl, onServerUrlChange }) => {
   const theme = useActiveTheme();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -136,7 +136,7 @@ export const ComparePanel: React.FC<ComparePanelProps> = ({ token, onTokenChange
 
   const exportCsv = () => {
     if (!result || result.x.length === 0) return;
-    downloadFile(compareToCsv(result), `moto-analyzer-compare-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`, 'text/csv;charset=utf-8;');
+    downloadFile(compareToCsv(result), `vehicle-analyzer-compare-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`, 'text/csv;charset=utf-8;');
   };
   useHotkeys({ g: () => void refresh(), v: exportCsv });
 
@@ -158,8 +158,8 @@ export const ComparePanel: React.FC<ComparePanelProps> = ({ token, onTokenChange
   return (
     <div className="flex h-full select-none flex-col overflow-y-auto bg-term-bg">
       <Toolbar>
-        <TermInput value={serverUrl} onChange={(e) => onServerUrlChange(e.target.value)} aria-label="moto-server URL" spellCheck={false} className="w-64" />
-        <TermInput type="password" value={token} onChange={(e) => onTokenChange(e.target.value)} placeholder="token" aria-label="moto-server API token" autoComplete="off" className="w-32 min-w-0" />
+        <TermInput value={serverUrl} onChange={(e) => onServerUrlChange(e.target.value)} aria-label="vehicle-server URL" spellCheck={false} className="w-64" />
+        <TermInput type="password" value={token} onChange={(e) => onTokenChange(e.target.value)} placeholder="token" aria-label="vehicle-server API token" autoComplete="off" className="w-32 min-w-0" />
         <TermButton hotkey="G" boxed onClick={() => void refresh()} disabled={busy}>
           Refresh
         </TermButton>

@@ -49,8 +49,8 @@ export const TABS: { id: CockpitTab; key: string; label: string }[] = [
 const SOURCES: { value: TelemetrySource; label: string; title: string }[] = [
   { value: 'virtual', label: 'Virtual bus', title: 'Simulated CL250 vehicle bus + platform bus' },
   { value: 'local_file', label: 'Log replay', title: 'Replay an .asc or .csv log' },
-  { value: 'server_session', label: 'Session', title: 'Recorded moto-server session (read-only HTTP)' },
-  { value: 'websocket', label: 'WS live', title: 'moto-server live stream' },
+  { value: 'server_session', label: 'Session', title: 'Recorded vehicle-server session (read-only HTTP)' },
+  { value: 'websocket', label: 'WS live', title: 'vehicle-server live stream' },
   { value: 'webserial', label: 'USB CAN', title: 'SLCAN adapter, opened listen-only' },
 ];
 
@@ -73,17 +73,17 @@ export const Header: React.FC<HeaderProps> = (p) => {
       <div className="flex h-strip items-stretch overflow-hidden border-b border-term-rule bg-term-raise">
         <Group>
           <span className="font-semibold tracking-[.01em] text-term-hi">
-            moto<span className="text-term-amber">-</span>analyzer
+            vehicle<span className="text-term-amber">-</span>analyzer
           </span>
           {p.customDbc ? (
             <span
               className="border border-term-amber px-[6px] leading-[18px] text-term-amber"
-              title={`Platform bus decoded with ${p.customDbc} (not moto-vehicle-defs)`}
+              title={`Platform bus decoded with ${p.customDbc} (not vehicle-defs)`}
             >
               ! custom DBC: {p.customDbc}
             </span>
           ) : (
-            <span className="border border-term-ruleHi px-[6px] leading-[18px] text-term-dim" title="Pinned moto-vehicle-defs tag">
+            <span className="border border-term-ruleHi px-[6px] leading-[18px] text-term-dim" title="Pinned vehicle-defs tag">
               defs {p.defsRef}
             </span>
           )}
@@ -114,7 +114,7 @@ export const Header: React.FC<HeaderProps> = (p) => {
                 value={p.wsToken}
                 onChange={(e) => p.onWsTokenChange(e.target.value)}
                 placeholder="token"
-                aria-label="moto-server API token"
+                aria-label="vehicle-server API token"
                 autoComplete="off"
                 className="term-input w-28"
               />

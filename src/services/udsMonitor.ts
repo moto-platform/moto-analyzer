@@ -6,7 +6,7 @@ import { checkTesterPolicy } from './udsComposer';
 /**
  * Passive UDS observer of the vehicle bus. It never transmits: it reassembles the
  * tester's requests and the ECU's answers (ISO 15765-2), pairs them, decodes them with
- * moto-vehicle-defs (DID formulas, ISO 14229 names) and flags what the platform rules
+ * vehicle-defs (DID formulas, ISO 14229 names) and flags what the platform rules
  * forbid (a request outside tester_policy, a functional request = a second tester).
  */
 

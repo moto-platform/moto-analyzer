@@ -23,7 +23,7 @@ describe('SLCAN', () => {
   });
 });
 
-describe('moto-server stream protocol', () => {
+describe('vehicle-server stream protocol', () => {
   it('reads CanFrameDto fields (data_hex, timestamp_us, is_extended, channel)', () => {
     const { frames } = parseStreamMessage(
       { type: 'frame', payload: { timestamp_us: 2_500_000, channel: 1, id: 0x18daf110, is_extended: true, dlc: 8, data_hex: '04620c1faaaaaaaa' } });

@@ -31,7 +31,7 @@ function client(statuses: StreamStatus[], sources: string[] = []) {
   return { c, ws: FakeSocket.last! };
 }
 
-describe('moto-server /ws/live client', () => {
+describe('vehicle-server /ws/live client', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();

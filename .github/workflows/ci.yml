@@ -12,7 +12,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      # moto-vehicle-defs is public (D-033): the relative-URL submodule needs no secret.
+      # vehicle-defs is public (D-033): the relative-URL submodule needs no secret.
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -20,8 +20,8 @@ jobs:
       # D-003/D-036: consumers pin defs to a release tag, never a branch commit.
       - name: Defs pin must be a tag
         run: |
-          git -C external/moto-vehicle-defs fetch --quiet --depth=1 origin '+refs/tags/*:refs/tags/*'
-          git -C external/moto-vehicle-defs describe --tags --exact-match
+          git -C external/vehicle-defs fetch --quiet --depth=1 origin '+refs/tags/*:refs/tags/*'
+          git -C external/vehicle-defs describe --tags --exact-match
 
       - uses: actions/setup-node@v4
         with:
