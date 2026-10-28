@@ -1,19 +1,62 @@
 import { BusRole, CanFrame } from '../types/can';
 
+/** One unit of SLCAN adapter output: a bare CR (command OK), a BELL (command refused) or a text line. */
+export type SlcanEvent = { kind: 'ok' } | { kind: 'error' } | { kind: 'line'; text: string };
+
+/**
+ * Splits adapter output into SLCAN events. Lawicel answers a command with a bare `\r` (OK) or
+ * `\a` (BELL, error); received frames and text replies (`V1013`) are text terminated by `\r`.
+ * Stray `\n` (some adapters send CR LF) is ignored. Chunks may split anywhere.
+ */
+export class SlcanScanner {
+  private pending = '';
+
+  public push(chunk: string): SlcanEvent[] {
+    const events: SlcanEvent[] = [];
+    for (const ch of chunk) {
+      if (ch === '\x07') {
+        this.pending = '';
+        events.push({ kind: 'error' });
+      } else if (ch === '\r') {
+        const text = this.pending.trim();
+        this.pending = '';
+        events.push(text ? { kind: 'line', text } : { kind: 'ok' });
+      } else {
+        this.pending += ch;
+      }
+    }
+    return events;
+  }
+}
+
+/** The subset of a WebSerial `SerialPort` the adapter uses (a fake one in tests). */
+export interface SlcanPort {
+  open(options: { baudRate: number }): Promise<void>;
+  close(): Promise<void>;
+  readable: ReadableStream<Uint8Array> | null;
+  writable: WritableStream<Uint8Array> | null;
+}
+
+type Reply = 'ok' | 'error' | 'timeout';
+
 /**
  * WebSerial CAN Adapter supporting standard SLCAN (Lawicel ASCII protocol)
  * Compatible with CANable, Candlelight, USB-to-CAN, ESP32 USB-CDC, and ST-Link VCP bridges.
  */
 export class WebSerialCanAdapter {
-  private port: any = null;
-  private reader: any = null;
+  private port: SlcanPort | null = null;
+  private reader: ReadableStreamDefaultReader<string> | null = null;
   private isReading: boolean = false;
   private onFrameCallback: ((frame: CanFrame) => void) | null = null;
-  private buffer: string = '';
+  private scanner = new SlcanScanner();
   private readableStreamClosed: Promise<void> | null = null;
+  private replyWaiter: ((reply: Reply) => void) | null = null;
 
-  /** `role` is the bus the adapter is plugged into; it decides how frames are decoded. */
-  constructor(private readonly role: BusRole) {}
+  /**
+   * `role` is the bus the adapter is plugged into; it decides how frames are decoded.
+   * `replyTimeoutMs` bounds the wait for each command's reply.
+   */
+  constructor(private readonly role: BusRole, private readonly replyTimeoutMs: number = 1000) {}
 
   public isSupported(): boolean {
     return 'serial' in navigator;
@@ -30,38 +73,72 @@ export class WebSerialCanAdapter {
     if (!this.isSupported()) {
       throw new Error('WebSerial API is not supported in this browser. Please use Chrome, Edge, or Brave.');
     }
+    // @ts-ignore
+    const port: SlcanPort = await navigator.serial.requestPort();
+    return this.openPort(port, baudRate, onFrame);
+  }
 
+  /** Opens an already chosen port; `connect` is this after the browser's port prompt. */
+  public async openPort(
+    port: SlcanPort,
+    baudRate: number,
+    onFrame: (frame: CanFrame) => void
+  ): Promise<boolean> {
     try {
       this.onFrameCallback = onFrame;
-      // Request serial port from user prompt
-      // @ts-ignore
-      this.port = await navigator.serial.requestPort();
+      this.port = port;
       await this.port.open({ baudRate });
+      this.readLoop();
 
       // Invariant 1: on the vehicle bus the analyzer only listens. Open the SLCAN
       // channel in listen-only mode (`L`), never in normal mode (`O`), so the adapter
       // neither transmits nor acknowledges frames. `C` first closes a channel an
-      // earlier session may have left open; `S6` selects 500 kbit/s (D-009, D-019).
-      await this.sendCommands(['C', 'S6', 'L']);
+      // earlier session may have left open (a BELL there only means it was closed);
+      // `S6` selects 500 kbit/s (D-009, D-019). Each reply is checked: an adapter that
+      // refuses or ignores `L` is never used, and no frame is delivered before `L` is
+      // confirmed (E-25 (2)).
+      const closed = await this.command('C');
+      if (closed === 'timeout') throw new Error('the adapter does not answer SLCAN commands (C)');
+      if ((await this.command('S6')) !== 'ok') throw new Error('the adapter refused the 500 kbit/s bit rate (S6)');
+      const listen = await this.command('L');
+      if (listen !== 'ok') {
+        throw new Error(
+          listen === 'error'
+            ? 'the adapter refused listen-only mode (L); not opened'
+            : 'the adapter did not confirm listen-only mode (L); not opened'
+        );
+      }
 
       this.isReading = true;
-      this.readLoop();
-
       return true;
     } catch (err: any) {
-      this.disconnect();
+      await this.disconnect();
       throw err;
     }
   }
 
-  private async sendCommands(commands: string[]): Promise<void> {
+  /** Sends one command and waits for its reply (bare CR = ok, BELL = error). */
+  private async command(cmd: string): Promise<Reply> {
+    const reply = new Promise<Reply>((resolve) => {
+      const timer = setTimeout(() => {
+        this.replyWaiter = null;
+        resolve('timeout');
+      }, this.replyTimeoutMs);
+      this.replyWaiter = (r) => {
+        clearTimeout(timer);
+        this.replyWaiter = null;
+        resolve(r);
+      };
+    });
+    await this.write(cmd);
+    return reply;
+  }
+
+  private async write(cmd: string): Promise<void> {
     if (!this.port?.writable) return;
     const writer = this.port.writable.getWriter();
     try {
-      const enc = new TextEncoder();
-      for (const cmd of commands) {
-        await writer.write(enc.encode(cmd + '\r'));
-      }
+      await writer.write(new TextEncoder().encode(cmd + '\r'));
     } finally {
       writer.releaseLock();
     }
@@ -69,7 +146,11 @@ export class WebSerialCanAdapter {
 
   public async disconnect(): Promise<void> {
     this.isReading = false;
+    this.replyWaiter?.('timeout');
     try {
+      if (this.port) {
+        await this.write('C').catch(() => undefined);
+      }
       if (this.reader) {
         await this.reader.cancel();
         this.reader = null;
@@ -79,7 +160,6 @@ export class WebSerialCanAdapter {
         this.readableStreamClosed = null;
       }
       if (this.port) {
-        await this.sendCommands(['C']).catch(() => undefined);
         await this.port.close();
         this.port = null;
       }
@@ -89,14 +169,15 @@ export class WebSerialCanAdapter {
   }
 
   private async readLoop() {
+    if (!this.port?.readable) return;
     const textDecoder = new TextDecoderStream();
-    // @ts-ignore
-    this.readableStreamClosed = this.port.readable.pipeTo(textDecoder.writable);
-    this.reader = textDecoder.readable.getReader();
+    this.readableStreamClosed = this.port.readable.pipeTo(textDecoder.writable as WritableStream<Uint8Array>);
+    const reader = textDecoder.readable.getReader();
+    this.reader = reader;
 
     try {
-      while (this.isReading) {
-        const { value, done } = await this.reader.read();
+      for (;;) {
+        const { value, done } = await reader.read();
         if (done) {
           break;
         }
@@ -105,24 +186,21 @@ export class WebSerialCanAdapter {
         }
       }
     } catch (err) {
-      console.error('Serial read error:', err);
+      if (this.isReading) console.error('Serial read error:', err);
     } finally {
-      if (this.reader) {
-        this.reader.releaseLock();
-      }
+      reader.releaseLock();
     }
   }
 
   private processIncomingChunk(chunk: string) {
-    this.buffer += chunk;
-    const lines = this.buffer.split('\r');
-    this.buffer = lines.pop() || ''; // Keep unfinished line in buffer
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const frame = parseSlcanLine(trimmed, this.role);
-      if (frame && this.onFrameCallback) this.onFrameCallback(frame);
+    for (const ev of this.scanner.push(chunk)) {
+      if (ev.kind !== 'line') {
+        this.replyWaiter?.(ev.kind);
+      } else if (this.isReading) {
+        // Frames are delivered only once listen-only mode is confirmed.
+        const frame = parseSlcanLine(ev.text, this.role);
+        if (frame && this.onFrameCallback) this.onFrameCallback(frame);
+      }
     }
   }
 }

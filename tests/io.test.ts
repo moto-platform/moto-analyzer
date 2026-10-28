@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSlcanLine } from '../src/services/webSerialCan';
+import { parseSlcanLine, SlcanScanner, WebSerialCanAdapter, type SlcanPort } from '../src/services/webSerialCan';
 import { parseStreamMessage } from '../src/services/streamClient';
 import { exportToVectorAsc } from '../src/services/exportService';
 import { parseVectorAsc, parseCanCsv } from '../src/services/logParser';
@@ -20,6 +20,82 @@ describe('SLCAN', () => {
     for (const l of ['t11', 't1109AA', 'tFFF1AA'.replace('FFF', '8FF'), 'z', '\x07', 't110', 'r1100']) {
       expect(parseSlcanLine(l, 'vehicle')).toBeNull();
     }
+  });
+  it('scans replies and lines across chunk boundaries', () => {
+    const s = new SlcanScanner();
+    expect(s.push('\rt110')).toEqual([{ kind: 'ok' }]);
+    expect(s.push('1AA\r\n\x07V1013\r')).toEqual([
+      { kind: 'line', text: 't1101AA' }, { kind: 'error' }, { kind: 'line', text: 'V1013' }]);
+    expect(s.push('\n\r')).toEqual([{ kind: 'ok' }]);
+  });
+});
+
+/** A fake serial port: `reply` maps each command the adapter writes to the adapter's answer. */
+function fakePort(reply: (cmd: string) => string | null) {
+  const enc = new TextEncoder();
+  const written: string[] = [];
+  let rx!: ReadableStreamDefaultController<Uint8Array>;
+  let cancelled = false;
+  const port: SlcanPort & { written: string[]; emit(s: string): void } = {
+    written,
+    emit: (s) => { if (!cancelled) rx.enqueue(enc.encode(s)); },
+    open: async () => undefined,
+    close: async () => undefined,
+    readable: new ReadableStream<Uint8Array>({ start: (c) => { rx = c; }, cancel: () => { cancelled = true; } }),
+    writable: new WritableStream<Uint8Array>({
+      write: (chunk) => {
+        const cmd = new TextDecoder().decode(chunk).replace(/\r$/, '');
+        written.push(cmd);
+        const r = reply(cmd);
+        if (r !== null) setTimeout(() => port.emit(r), 0);
+      },
+    }),
+  };
+  return port;
+}
+
+describe('SLCAN listen-only open (invariant 1, E-25 (2))', () => {
+  it('opens only after C, S6 and L are each confirmed, and never sends O', async () => {
+    const port = fakePort(() => '\r');
+    const frames: CanFrame[] = [];
+    const adapter = new WebSerialCanAdapter('vehicle', 200);
+    await expect(adapter.openPort(port, 115200, (f) => frames.push(f))).resolves.toBe(true);
+    expect(port.written).toEqual(['C', 'S6', 'L']);
+    expect(adapter.isConnected()).toBe(true);
+    port.emit('t1102AABB\r');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(frames).toHaveLength(1);
+    await adapter.disconnect();
+    expect(port.written.at(-1)).toBe('C');
+    expect(port.written).not.toContain('O');
+  });
+
+  it('accepts a BELL for C (channel already closed)', async () => {
+    const port = fakePort((c) => (c === 'C' ? '\x07' : '\r'));
+    await expect(new WebSerialCanAdapter('vehicle', 200).openPort(port, 115200, () => undefined)).resolves.toBe(true);
+  });
+
+  it('refuses an adapter that rejects L and delivers no frame', async () => {
+    const frames: CanFrame[] = [];
+    const port = fakePort((c) => (c === 'L' ? 't1102AABB\r\x07' : '\r'));
+    const adapter = new WebSerialCanAdapter('vehicle', 200);
+    await expect(adapter.openPort(port, 115200, (f) => frames.push(f))).rejects.toThrow(/refused listen-only/);
+    expect(adapter.isConnected()).toBe(false);
+    expect(frames).toHaveLength(0);
+  });
+
+  it('refuses an adapter that never confirms L', async () => {
+    const port = fakePort((c) => (c === 'L' ? null : '\r'));
+    const adapter = new WebSerialCanAdapter('vehicle', 50);
+    await expect(adapter.openPort(port, 115200, () => undefined)).rejects.toThrow(/did not confirm listen-only/);
+    expect(adapter.isConnected()).toBe(false);
+  });
+
+  it('refuses a silent port and a refused bit rate', async () => {
+    await expect(new WebSerialCanAdapter('vehicle', 50).openPort(fakePort(() => null), 115200, () => undefined))
+      .rejects.toThrow(/does not answer/);
+    await expect(new WebSerialCanAdapter('vehicle', 50).openPort(fakePort((c) => (c === 'S6' ? '\x07' : '\r')), 115200, () => undefined))
+      .rejects.toThrow(/S6/);
   });
 });
 
