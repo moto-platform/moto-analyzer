@@ -24,6 +24,7 @@ import { StreamStatus, WebSocketStreamClient } from './services/streamClient';
 import { ThemeContext, useTheme } from './ui/theme';
 import { focusPanelFilter, useHotkeys } from './ui/keys';
 import { KeyBar, KeyHelp, type HelpGroup } from './ui/KeyBar';
+import { readLayout, writeLayout } from './ui/layout';
 
 /** Frames replayed silently to rebuild the views after a backward seek. */
 const REPLAY_REBUILD_WINDOW = 2000;
@@ -41,7 +42,8 @@ export function App() {
   const [store] = useState(() => new CaptureStore(DEFS));
   useCapture(store);
 
-  const [activeTab, setActiveTab] = useState<CockpitTab>('trace');
+  const [initialLayout] = useState(readLayout);
+  const [activeTab, setActiveTab] = useState<CockpitTab>(initialLayout.view);
   const [isRunning, setIsRunning] = useState<boolean>(true);
   const [source, setSource] = useState<TelemetrySource>('virtual');
   const [usbRole, setUsbRole] = useState<BusRole>('vehicle');
@@ -65,9 +67,13 @@ export function App() {
   };
   const [wsSource, setWsSource] = useState<string | null>(null);
   const [serverUrl, setServerUrl] = useState<string>(DEFAULT_SERVER_URL);
-  const [showAttitudeHud, setShowAttitudeHud] = useState<boolean>(true);
+  const [showAttitudeHud, setShowAttitudeHud] = useState<boolean>(initialLayout.hud);
   const [msgPerSec, setMsgPerSec] = useState<number>(0);
   const [sourceError, setSourceError] = useState<string | null>(null);
+
+  useEffect(() => {
+    writeLayout({ view: activeTab, hud: showAttitudeHud });
+  }, [activeTab, showAttitudeHud]);
 
   // Time Machine replay
   const [replayFrames, setReplayFrames] = useState<ReplayItem[]>([]);
