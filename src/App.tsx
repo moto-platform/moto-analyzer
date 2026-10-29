@@ -451,7 +451,7 @@ export function App() {
             {activeTab === 'compare' && (
               <ComparePanel token={wsToken} onTokenChange={handleTokenChange} serverUrl={serverUrl} onServerUrlChange={setServerUrl} />
             )}
-            {activeTab === 'sync' && <SyncPanel store={store} onLogLoaded={handleLogLoaded} />}
+            {activeTab === 'sync' && <SyncPanel store={store} source={source} onLogLoaded={handleLogLoaded} />}
           </main>
 
           {showAttitudeHud && (

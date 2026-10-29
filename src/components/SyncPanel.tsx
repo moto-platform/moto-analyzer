@@ -1,36 +1,69 @@
-import React, { useRef, useState } from 'react';
-import { CanFrame, DbcMessageDef } from '../types/can';
+import React, { useEffect, useRef, useState } from 'react';
+import { CanFrame, DbcMessageDef, TelemetrySource } from '../types/can';
 import { CaptureStore } from '../state/captureStore';
 import { parseDbcText } from '../services/dbcParser';
-import { parseVectorAsc, parseCanCsv } from '../services/logParser';
+import { startLogIngest, type LogIngestJob } from '../services/ingestClient';
 import { Na, Note, TermButton, Toolbar, cn } from '../ui/primitives';
 import { useHotkeys } from '../ui/keys';
 import { GutterMark, ListHead, TD, TH } from '../ui/panel-parts';
 
 interface SyncPanelProps {
   store: CaptureStore;
+  source: TelemetrySource;
   onLogLoaded: (frames: CanFrame[], filename: string) => void;
 }
 
 type Selection = { kind: 'msg'; id: number } | { kind: 'dids' };
 
+type ImportState =
+  | { status: 'idle' }
+  | { status: 'running'; name: string; parsed: number; total: number }
+  | { status: 'done'; name: string; total: number }
+  | { status: 'cancelled'; name: string; parsed: number; total: number }
+  | { status: 'error'; name: string; message: string };
+
 const id3 = (id: number) => `0x${id.toString(16).toUpperCase().padStart(3, '0')}`;
 
-export const SyncPanel: React.FC<SyncPanelProps> = ({ store, onLogLoaded }) => {
+export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogLoaded }) => {
   const defs = store.defs;
   const catalog = store.pipeline.catalog('platform');
   const [selection, setSelection] = useState<Selection>({ kind: 'msg', id: catalog[0]?.id ?? 0 });
   const [status, setStatus] = useState<string>('');
+  const [importState, setImportState] = useState<ImportState>({ status: 'idle' });
   const dbcInput = useRef<HTMLInputElement>(null);
   const logInput = useRef<HTMLInputElement>(null);
+  const logJob = useRef<LogIngestJob | null>(null);
+  const importSeq = useRef<number>(0);
+
+  // Leaving the view drops a running import; nothing reached the store yet.
+  useEffect(() => () => logJob.current?.cancel(), []);
 
   const selectedMsg: DbcMessageDef | undefined = selection.kind === 'msg' ? catalog.find((m) => m.id === selection.id) : undefined;
+  const importPct =
+    importState.status === 'running' && importState.total > 0
+      ? Math.min(100, Math.round((importState.parsed / importState.total) * 100))
+      : 0;
 
   const readFile = (file: File, cb: (text: string) => void) => {
     const reader = new FileReader();
     reader.onload = (e) => cb(String(e.target?.result ?? ''));
     reader.readAsText(file);
   };
+
+  const cancelImport = () => {
+    if (importState.status !== 'running') return;
+    const { name, parsed, total } = importState;
+    importSeq.current += 1;
+    logJob.current?.cancel();
+    logJob.current = null;
+    setStatus(`Import of ${name} cancelled after ${parsed.toLocaleString()} of ${total.toLocaleString()} frames.`);
+    setImportState({ status: 'cancelled', name, parsed, total });
+  };
+
+  // Finishing would switch back to log replay, so a source chosen meanwhile cancels the import.
+  useEffect(() => {
+    if (source !== 'local_file' && importState.status === 'running') cancelImport();
+  }, [source]);
 
   const handleDbcUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -58,15 +91,52 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, onLogLoaded }) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+
+    if (importState.status === 'running') cancelImport();
+    const id = ++importSeq.current;
+    const format = file.name.toLowerCase().endsWith('.asc') ? 'asc' : 'csv';
+    const frames: CanFrame[] = [];
+    let finished = false;
+    setStatus('');
+    setImportState({ status: 'running', name: file.name, parsed: 0, total: 0 });
+
+    // The worker only parses: the store sees the log through the replay transport, which
+    // decodes each frame with the catalog active at that moment.
     readFile(file, (text) => {
-      const frames = file.name.toLowerCase().endsWith('.asc') ? parseVectorAsc(text) : parseCanCsv(text);
-      if (frames.length === 0) {
-        setStatus(`No CAN frame could be read from ${file.name}.`);
-        return;
-      }
-      frames.sort((a, b) => a.timestamp - b.timestamp);
-      onLogLoaded(frames, file.name);
-      setStatus(`Loaded ${frames.length.toLocaleString()} frames from ${file.name} for replay.`);
+      const job = startLogIngest(
+        { kind: 'parse-log', id, format, text },
+        {
+          onProgress: (parsed, total) => {
+            if (importSeq.current !== id) return;
+            setImportState({ status: 'running', name: file.name, parsed, total });
+          },
+          onBatch: (batch) => {
+            if (importSeq.current !== id) return;
+            frames.push(...batch);
+          },
+          onDone: (total) => {
+            finished = true;
+            if (importSeq.current !== id) return;
+            logJob.current = null;
+            if (frames.length === 0) {
+              setStatus(`No CAN frame could be read from ${file.name}.`);
+              setImportState({ status: 'done', name: file.name, total });
+              return;
+            }
+            onLogLoaded(frames, file.name);
+            setStatus(`Loaded ${frames.length.toLocaleString()} frames from ${file.name} for replay.`);
+            setImportState({ status: 'done', name: file.name, total: frames.length });
+          },
+          onError: (message) => {
+            finished = true;
+            if (importSeq.current !== id) return;
+            logJob.current = null;
+            setStatus(`Could not import ${file.name}: ${message}`);
+            setImportState({ status: 'error', name: file.name, message });
+          },
+        }
+      );
+      if (!finished) logJob.current = job;
     });
   };
 
@@ -106,6 +176,28 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, onLogLoaded }) => {
       </Toolbar>
 
       {status && <div className="shrink-0 border-b border-term-rule px-[14px] leading-[24px] text-term-fg">{status}</div>}
+
+      {importState.status === 'running' && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-term-rule px-[14px] py-[4px] text-term-dim">
+          <span className="min-w-0 truncate">importing {importState.name}</span>
+          <div
+            role="progressbar"
+            aria-label={`Importing ${importState.name}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={importPct}
+            className="h-[6px] min-w-[80px] flex-1 border border-term-rule bg-term-raise"
+          >
+            <div className="h-full bg-term-amber" style={{ width: `${importPct}%` }} />
+          </div>
+          <span className="w-[18ch] text-right">
+            {importState.total === 0
+              ? 'parsing'
+              : `${importState.parsed.toLocaleString()} / ${importState.total.toLocaleString()}`}
+          </span>
+          <TermButton onClick={cancelImport}>cancel</TermButton>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <nav aria-label="Definitions" className="flex w-[330px] shrink-0 flex-col overflow-y-auto border-r border-term-rule bg-term-raise">
