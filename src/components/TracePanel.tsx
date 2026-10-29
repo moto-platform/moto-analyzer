@@ -222,7 +222,7 @@ export const TracePanel: React.FC<TracePanelProps> = ({ store, triggerArmed, onA
       if (cursorFrame) void copyBytes(cursorFrame);
     },
     m: () => setMode((m) => (m === 'overwrite' ? 'scroll' : 'overwrite')),
-    e: () => setShowExportMenu((v) => !v),
+    v: () => setShowExportMenu((v) => !v),
   });
 
   const decoded = (f: CanFrame) => {
@@ -309,7 +309,7 @@ export const TracePanel: React.FC<TracePanelProps> = ({ store, triggerArmed, onA
             <span className="text-term-fg">{frames.length}</span> ids
           </span>
           <div className="relative" ref={exportRef}>
-            <TermButton hotkey="E" aria-haspopup="menu" aria-expanded={showExportMenu} onClick={() => setShowExportMenu(!showExportMenu)}>
+            <TermButton hotkey="V" aria-haspopup="menu" aria-expanded={showExportMenu} onClick={() => setShowExportMenu(!showExportMenu)}>
               Export
             </TermButton>
             {showExportMenu && (
@@ -491,11 +491,11 @@ export const TracePanel: React.FC<TracePanelProps> = ({ store, triggerArmed, onA
                 { k: 'p', label: 'Pause on this id' },
                 { k: 'y', label: 'Copy bytes' },
                 { k: 'M', label: 'Scroll log' },
-                { k: 'E', label: 'Export' },
+                { k: 'V', label: 'Export' },
               ]
             : [
                 { k: 'M', label: 'Overwrite' },
-                { k: 'E', label: 'Export' },
+                { k: 'V', label: 'Export' },
               ]
         }
         legend={<TraceLegend />}

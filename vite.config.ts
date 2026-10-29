@@ -27,6 +27,6 @@ export default defineConfig({
     host: true,
   },
   test: {
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
   },
 });

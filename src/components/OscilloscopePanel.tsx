@@ -349,7 +349,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
     r: clearCursors,
     a: addPicked,
     m: () => setShowMath((v) => !v),
-    e: handleExportCsv,
+    v: handleExportCsv,
     p: handleSnapshotPng,
   });
 
@@ -401,7 +401,7 @@ export const OscilloscopePanel: React.FC<OscilloscopePanelProps> = ({ store }) =
           <TermButton hotkey="M" toggled={showMath} onClick={() => setShowMath((v) => !v)} title="Host-side math channel">
             math
           </TermButton>
-          <TermButton hotkey="E" onClick={handleExportCsv} title="Export all plotted channels as CSV">
+          <TermButton hotkey="V" onClick={handleExportCsv} title="Export all plotted channels as CSV">
             CSV
           </TermButton>
           <TermButton hotkey="P" onClick={handleSnapshotPng} title="Save the plot as PNG">
