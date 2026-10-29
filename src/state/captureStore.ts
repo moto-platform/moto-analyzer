@@ -70,6 +70,18 @@ export class CaptureStore {
   }
 
   public ingest(raw: CanFrame) {
+    this.ingestOne(raw);
+    this.notify();
+  }
+
+  /** Applies frames in order with one UI notification for the whole batch. */
+  public ingestBatch(frames: CanFrame[]) {
+    if (frames.length === 0) return;
+    for (const frame of frames) this.ingestOne(frame);
+    this.notify();
+  }
+
+  private ingestOne(raw: CanFrame) {
     const frame = this.pipeline.process(raw);
     if (frame.bus === 'vehicle' && !frame.name) frame.name = this.udsName(frame.id);
     const key = frameKey(frame.bus, frame.id);
@@ -97,8 +109,6 @@ export class CaptureStore {
     }
 
     if (frame.bus === 'vehicle' && this.monitor.isUdsId(frame.id)) this.monitor.process(frame);
-
-    this.notify();
   }
 
   /**
