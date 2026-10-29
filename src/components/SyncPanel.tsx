@@ -10,7 +10,6 @@ import { GutterMark, ListHead, TD, TH } from '../ui/panel-parts';
 interface SyncPanelProps {
   store: CaptureStore;
   source: TelemetrySource;
-  onLogStart: () => void;
   onLogLoaded: (frames: CanFrame[], filename: string) => void;
 }
 
@@ -25,7 +24,7 @@ type ImportState =
 
 const id3 = (id: number) => `0x${id.toString(16).toUpperCase().padStart(3, '0')}`;
 
-export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart, onLogLoaded }) => {
+export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogLoaded }) => {
   const defs = store.defs;
   const catalog = store.pipeline.catalog('platform');
   const [selection, setSelection] = useState<Selection>({ kind: 'msg', id: catalog[0]?.id ?? 0 });
@@ -34,19 +33,10 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart,
   const dbcInput = useRef<HTMLInputElement>(null);
   const logInput = useRef<HTMLInputElement>(null);
   const logJob = useRef<LogIngestJob | null>(null);
-  const importStarted = useRef<boolean>(false);
   const importSeq = useRef<number>(0);
 
-  useEffect(
-    () => () => {
-      logJob.current?.cancel();
-      if (importStarted.current) {
-        store.clear();
-        store.resetRecordedMeta();
-      }
-    },
-    [store]
-  );
+  // Leaving the view drops a running import; nothing reached the store yet.
+  useEffect(() => () => logJob.current?.cancel(), []);
 
   const selectedMsg: DbcMessageDef | undefined = selection.kind === 'msg' ? catalog.find((m) => m.id === selection.id) : undefined;
   const importPct =
@@ -66,15 +56,11 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart,
     importSeq.current += 1;
     logJob.current?.cancel();
     logJob.current = null;
-    if (importStarted.current) {
-      store.clear();
-      store.resetRecordedMeta();
-    }
-    importStarted.current = false;
     setStatus(`Import of ${name} cancelled after ${parsed.toLocaleString()} of ${total.toLocaleString()} frames.`);
     setImportState({ status: 'cancelled', name, parsed, total });
   };
 
+  // Finishing would switch back to log replay, so a source chosen meanwhile cancels the import.
   useEffect(() => {
     if (source !== 'local_file' && importState.status === 'running') cancelImport();
   }, [source]);
@@ -83,7 +69,6 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart,
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (importState.status === 'running') cancelImport();
     readFile(file, (text) => {
       const parsed = parseDbcText(text);
       if (parsed.length === 0) {
@@ -97,7 +82,6 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart,
   };
 
   const resetDefs = () => {
-    if (importState.status === 'running') cancelImport();
     store.setPlatformCatalog(defs.platform.messages, null);
     setSelection({ kind: 'msg', id: defs.platform.messages[0]?.id ?? 0 });
     setStatus(`Back to platform.dbc of defs ${defs.ref}.`);
@@ -113,19 +97,14 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart,
     const format = file.name.toLowerCase().endsWith('.asc') ? 'asc' : 'csv';
     const frames: CanFrame[] = [];
     let finished = false;
-    importStarted.current = false;
     setStatus('');
     setImportState({ status: 'running', name: file.name, parsed: 0, total: 0 });
 
+    // The worker only parses: the store sees the log through the replay transport, which
+    // decodes each frame with the catalog active at that moment.
     readFile(file, (text) => {
       const job = startLogIngest(
-        {
-          kind: 'parse-log',
-          id,
-          format,
-          text,
-          catalogs: { platform: store.pipeline.catalog('platform'), vehicle: store.pipeline.catalog('vehicle') },
-        },
+        { kind: 'parse-log', id, format, text },
         {
           onProgress: (parsed, total) => {
             if (importSeq.current !== id) return;
@@ -133,12 +112,7 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart,
           },
           onBatch: (batch) => {
             if (importSeq.current !== id) return;
-            if (!importStarted.current) {
-              importStarted.current = true;
-              onLogStart();
-            }
             frames.push(...batch);
-            store.ingestBatch(batch);
           },
           onDone: (total) => {
             finished = true;
@@ -150,7 +124,6 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart,
               return;
             }
             onLogLoaded(frames, file.name);
-            importStarted.current = false;
             setStatus(`Loaded ${frames.length.toLocaleString()} frames from ${file.name} for replay.`);
             setImportState({ status: 'done', name: file.name, total: frames.length });
           },
@@ -158,11 +131,6 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart,
             finished = true;
             if (importSeq.current !== id) return;
             logJob.current = null;
-            if (importStarted.current) {
-              store.clear();
-              store.resetRecordedMeta();
-            }
-            importStarted.current = false;
             setStatus(`Could not import ${file.name}: ${message}`);
             setImportState({ status: 'error', name: file.name, message });
           },
@@ -223,7 +191,9 @@ export const SyncPanel: React.FC<SyncPanelProps> = ({ store, source, onLogStart,
             <div className="h-full bg-term-amber" style={{ width: `${importPct}%` }} />
           </div>
           <span className="w-[18ch] text-right">
-            {importState.parsed.toLocaleString()} / {importState.total.toLocaleString()}
+            {importState.total === 0
+              ? 'parsing'
+              : `${importState.parsed.toLocaleString()} / ${importState.total.toLocaleString()}`}
           </span>
           <TermButton onClick={cancelImport}>cancel</TermButton>
         </div>

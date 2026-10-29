@@ -195,26 +195,17 @@ export function App() {
   // replayIndexRef is the source of truth for the replay position; every writer sets
   // it and the state together (a state-to-ref sync effect would lag and rewind it).
 
-  const handleLogStart = () => {
+  const handleLogLoaded = (frames: CanFrame[]) => {
     stopLiveSources();
     setIsRunning(false);
     setIsReplaying(false);
     store.clear();
     store.resetRecordedMeta();
-    rxCounterRef.current = 0;
-    setReplayFrames([]);
-    setReplayIndex(0);
-    replayIndexRef.current = 0;
-    setSource('local_file');
-  };
-
-  // The worker already streamed every batch through store.ingestBatch; this only
-  // installs the replay timeline after the import completes.
-  const handleLogLoaded = (frames: CanFrame[]) => {
     setReplayFrames(framesToItems(frames));
     setReplayIndex(0);
     replayIndexRef.current = 0;
     setSource('local_file');
+    if (frames.length > 0) ingest(frames[0]);
   };
 
   /** Recorded session series -> replay items (or pushed at once). Display metadata goes to the store. */
@@ -460,7 +451,7 @@ export function App() {
             {activeTab === 'compare' && (
               <ComparePanel token={wsToken} onTokenChange={handleTokenChange} serverUrl={serverUrl} onServerUrlChange={setServerUrl} />
             )}
-            {activeTab === 'sync' && <SyncPanel store={store} source={source} onLogStart={handleLogStart} onLogLoaded={handleLogLoaded} />}
+            {activeTab === 'sync' && <SyncPanel store={store} source={source} onLogLoaded={handleLogLoaded} />}
           </main>
 
           {showAttitudeHud && (

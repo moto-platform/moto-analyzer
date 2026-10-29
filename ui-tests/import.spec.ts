@@ -49,6 +49,8 @@ test('imports a 200k-frame ASC log with progress and no console errors', async (
   await expect(page.getByRole('progressbar', { name: `Importing ${fixture.name}` })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(`Loaded 200,000 frames from ${fixture.name} for replay.`)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole('radio', { name: /Log replay/ })).toHaveAttribute('aria-checked', 'true');
+  // The import only installs the replay timeline: the views hold the first frame, not the whole log.
+  await expect(page.locator('span', { hasText: /^1 total$/ })).toBeVisible();
 
   expect(foreignRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);

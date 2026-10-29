@@ -51,11 +51,10 @@ export class FramePipeline {
   }
 
   public process(raw: CanFrame): CanFrame {
-    const msg = this.messageFor(raw);
     const frame = this.timing.stamp(raw);
+    const msg = this.messageFor(frame);
     frame.name = msg?.name ?? raw.name;
-    // A log worker decodes with the same catalogs; the store still owns timing and E2E.
-    frame.decodedSignals = raw.decodedSignals ?? decodeFrameSignals(frame.data, msg);
+    frame.decodedSignals = decodeFrameSignals(frame.data, msg);
 
     if (msg?.e2e && frame.bus !== 'vehicle') {
       let checker = this.checkers.get(msg.id);
