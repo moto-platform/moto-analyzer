@@ -105,7 +105,9 @@ export interface DbcCatalog {
   messages: DbcMessageDef[];
 }
 
-export type CockpitTab = 'trace' | 'sniffer' | 'oscilloscope' | 'uds' | 'health' | 'cluster' | 'sync' | 'session' | 'compare';
+/** Every cockpit view; the type and the layout check (`ui/layout.ts`) both derive from it. */
+export const COCKPIT_TABS = ['trace', 'sniffer', 'oscilloscope', 'uds', 'health', 'cluster', 'sync', 'session', 'compare'] as const;
+export type CockpitTab = (typeof COCKPIT_TABS)[number];
 export type TraceMode = 'overwrite' | 'scroll';
 export type TelemetrySource = 'virtual' | 'local_file' | 'websocket' | 'webserial' | 'server_session';
 
