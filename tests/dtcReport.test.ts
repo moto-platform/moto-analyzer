@@ -92,9 +92,6 @@ describe('DTC report from the pinned defs vectors', () => {
     const [m, s, e] = report.dtcs;
     const [speed, fuel] = multiExpect.records[0].values;
     const fuelDef = catalogOf(fuel.did);
-    const fuelValue = Object.fromEntries(
-      fuelDef.fields!.map((field) => [field.name, field.enumNames![bytes(fuel.data)[field.byte]]])
-    );
 
     expect(m.dtc).toBe(hexDtc(multiExpect.dtc));
     expect(m.code).toBe(multi.code);
@@ -111,7 +108,7 @@ describe('DTC report from the pinned defs vectors', () => {
         data: bytes(speed.data),
         value: speed.value,
       },
-      { did: fuel.did, name: fuelDef.name, data: bytes(fuel.data), value: fuelValue },
+      { did: fuel.did, name: fuelDef.name, data: bytes(fuel.data), value: fuel.value },
     ]);
     expect(m.snapshotRaw).toBe('0000F40D3CF4030200');
     expect(m.extData).toBeNull();
@@ -161,15 +158,15 @@ describe('DTC report from the pinned defs vectors', () => {
       `${dtc},${code},${status},${multiExpect.records[0].record_number},${didHex(speed.did)},${speedDef.name},,${speed.value},${speedDef.unit},${hex(bytes(speed.data))}`
     );
     for (const field of fuelDef.fields!) {
-      const value = field.enumNames![bytes(fuel.data)[field.byte]];
+      const value = fuel.value[field.name];
       expect(rows).toContain(
         `${dtc},${code},${status},${multiExpect.records[0].record_number},${didHex(fuel.did)},${fuelDef.name},${field.name},${value},${field.unit},${fuelRaw}`
       );
     }
     expect(rows).toContain(
-      `${dtc},${code},${status},,,stop:${stoppedExpect.stop},,,,${hex(bytes(stoppedExpect.rest))}`
+      `${hexDtc(stoppedExpect.dtc)},${formatDtc(stoppedExpect.dtc)},${hexStatus(stoppedExpect.status)},,,stop:${stoppedExpect.stop},,,,${hex(bytes(stoppedExpect.rest))}`
     );
-    expect(rows).toContain(`${dtc},${code},${hexStatus(bareExpect.status)},,,,,,,`);
+    expect(rows).toContain(`${hexDtc(bareExpect.dtc)},${formatDtc(bareExpect.dtc)},${hexStatus(bareExpect.status)},,,,,,,`);
     expect(rows.filter((row) => row.startsWith(`${dtc},${code},${status}`) && !/,(stop|ext):/.test(row))).toHaveLength(4);
     expect(rows.filter((row) => row.includes(',ext:'))).toEqual([
       `${hexDtcOf(extended)},${extended.code},${hexStatusOf(extended)},${extendedExpect.first_record_number},,ext:${extendedExpect.first_record_kind},,,,${hex(bytes(extendedExpect.rest))}`,
