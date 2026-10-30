@@ -6,7 +6,7 @@ import { decodeDtcExtDataRecords, decodeDtcSnapshotRecords, DtcExtDataKind, DtcS
 import { dtcReportToCsv, dtcReportToJson } from '../services/dtcReport';
 import { composeUdsRequest, composerServices } from '../services/udsComposer';
 import { downloadFile } from '../services/exportService';
-import { formatValue, hexId } from '../services/format';
+import { formatValue, hexDid, hexId } from '../services/format';
 import { KeyValues, Na, Note, Pane, Segmented, TermButton, TermInput, Toolbar, cn } from '../ui/primitives';
 import { useHotkeys } from '../ui/keys';
 import { Empty, GutterMark, TD, TH } from '../ui/panel-parts';
@@ -23,7 +23,6 @@ const TABS: Tab[] = ['transactions', 'dids', 'dtcs', 'composer'];
 
 const hex2 = (b: number) => b.toString(16).toUpperCase().padStart(2, '0');
 const hexBytes = (b: number[]) => b.map(hex2).join(' ');
-const didHex = (d: number) => `0x${d.toString(16).toUpperCase().padStart(4, '0')}`;
 
 function parseHexBytes(text: string): number[] | null {
   const clean = text.replace(/0x/gi, '').replace(/[\s,]+/g, '');
@@ -181,7 +180,7 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
   const [sid, setSid] = useState<number>(0x22);
   const [sub, setSub] = useState<number>(0x03);
   const defaultDid = defs.vehicle.dids[0];
-  const [didText, setDidText] = useState<string>(defaultDid ? didHex(defaultDid.did) : '');
+  const [didText, setDidText] = useState<string>(defaultDid ? hexDid(defaultDid.did) : '');
   const [extraText, setExtraText] = useState<string>('');
   const [composerLog, setComposerLog] = useState<string[]>([]);
   const svc = services.find((s) => s.sid === sid);
@@ -375,7 +374,7 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
                     const fault = d.nrc !== undefined;
                     return (
                       <tr key={d.did}>
-                        <td className={cn(TD, 'pl-[14px] text-term-hi')}>{didHex(d.did)}</td>
+                        <td className={cn(TD, 'pl-[14px] text-term-hi')}>{hexDid(d.did)}</td>
                         <td className={TD}>
                           {d.name}
                           {d.def && !d.def.verified && <span className="ml-[1ch] text-term-faint">unverified</span>}

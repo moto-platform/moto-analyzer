@@ -20,4 +20,6 @@ export function formatSignal(sig: DbcSignalDef | undefined, v: number | string |
   return formatValue(v);
 }
 
+export const hexDid = (did: number) => `0x${did.toString(16).toUpperCase().padStart(4, '0')}`;
+
 export const hexId = (id: number, extended: boolean) => `0x${id.toString(16).toUpperCase().padStart(extended ? 8 : 3, '0')}`;

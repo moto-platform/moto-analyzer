@@ -1,5 +1,6 @@
 import { Defs } from '../defs/model';
 import { decodeDtcExtDataRecords, decodeDtcSnapshotRecords } from './dtcRecords';
+import { hexDid } from './format';
 import { DtcEntry } from './udsMonitor';
 
 const CSV_HEADER = ['dtc', 'status', 'record_number', 'did', 'name', 'field', 'value', 'unit', 'raw'];
@@ -8,7 +9,6 @@ const hexByte = (b: number) => b.toString(16).toUpperCase().padStart(2, '0');
 const hexBytes = (data: number[]) => data.map(hexByte).join('');
 const hexDtc = (dtc: number) => `0x${dtc.toString(16).toUpperCase().padStart(6, '0')}`;
 const hexStatus = (status: number) => `0x${hexByte(status)}`;
-const hexDid = (did: number) => `0x${did.toString(16).toUpperCase().padStart(4, '0')}`;
 
 const csvCell = (text: string): string => (/[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text);
 const csvRow = (cells: string[]): string => cells.map(csvCell).join(',');
@@ -68,6 +68,13 @@ export function dtcReportToCsv(defs: Defs, dtcs: DtcEntry[]): string {
     if (decoded?.stop) {
       rows.push(csvRow([dtc, status, '', '', `stop:${decoded.stop}`, '', '', '', hexBytes(decoded.rest)]));
       wrote = true;
+    }
+    if (d.extData) {
+      const ext = decodeDtcExtDataRecords(defs, d.extData);
+      if (ext.firstRecordNumber !== null) {
+        rows.push(csvRow([dtc, status, String(ext.firstRecordNumber), '', `ext:${ext.firstRecordKind}`, '', '', '', hexBytes(ext.rest)]));
+        wrote = true;
+      }
     }
     if (!wrote) rows.push(csvRow([dtc, status, '', '', '', '', '', '', '']));
   }

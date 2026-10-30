@@ -110,4 +110,13 @@ describe('DTC report from the pinned defs vectors', () => {
     expect(rows).toContain('0x123456,0x0C,,,,,,,');
     expect(rows.filter((row) => row.startsWith('0x123456,0x08') && !row.includes('stop:'))).toHaveLength(4);
   });
+
+  it('writes a CSV row for extended data with the first record kind and the raw records', () => {
+    const extended = extEntry('manufacturer_record_first');
+    const dtc = `0x${extended.dtc.toString(16).toUpperCase().padStart(6, '0')}`;
+    const status = `0x${extended.status.toString(16).toUpperCase().padStart(2, '0')}`;
+    const rows = dtcReportToCsv(DEFS, [extended]).split('\n');
+
+    expect(rows).toEqual(['dtc,status,record_number,did,name,field,value,unit,raw', `${dtc},${status},1,,ext:manufacturer,,,,${hex(extended.extData!)}`]);
+  });
 });
