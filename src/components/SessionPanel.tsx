@@ -1,8 +1,17 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Note, TermButton, TermInput, Toolbar, cn } from '../ui/primitives';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Note, Segmented, TermButton, TermInput, Toolbar, cn } from '../ui/primitives';
 import { Empty, GutterMark, ListHead } from '../ui/panel-parts';
 import { useHotkeys } from '../ui/keys';
 import { RecordedSeries, SessionClient, SessionRow, sessionRowInfo, summarizeReport } from '../services/sessionClient';
+import {
+  SessionFilter,
+  SessionSort,
+  defaultSessionFilter,
+  filterSessions,
+  loadSessionFilter,
+  saveSessionFilter,
+  sessionStatuses,
+} from '../services/sessionFilter';
 
 interface SessionPanelProps {
   /** Shared with the WS live token (same sessionStorage key, owned by App). */
@@ -22,8 +31,15 @@ export const SessionPanel: React.FC<SessionPanelProps> = ({ token, onTokenChange
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
+  const [filter, setFilter] = useState<SessionFilter>(() => loadSessionFilter());
+
+  useEffect(() => {
+    saveSessionFilter(filter);
+  }, [filter]);
 
   const client = useMemo(() => new SessionClient(serverUrl, token), [serverUrl, token]);
+  const visible = useMemo(() => filterSessions(sessions, filter), [sessions, filter]);
+  const statuses = useMemo(() => sessionStatuses(sessions), [sessions]);
 
   const run = useCallback(async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -70,10 +86,16 @@ export const SessionPanel: React.FC<SessionPanelProps> = ({ token, onTokenChange
     });
   };
 
+  const toggleStatus = (status: string) =>
+    setFilter((prev) => ({
+      ...prev,
+      statuses: prev.statuses.includes(status) ? prev.statuses.filter((value) => value !== status) : [...prev.statuses, status],
+    }));
+
   const move = (delta: number) => {
-    if (sessions.length === 0) return;
-    const i = sessions.findIndex((s) => s.session_id === selected);
-    const next = sessions[Math.max(0, Math.min(sessions.length - 1, (i < 0 ? 0 : i) + delta))];
+    if (visible.length === 0) return;
+    const i = visible.findIndex((s) => s.session_id === selected);
+    const next = visible[Math.max(0, Math.min(visible.length - 1, (i < 0 ? 0 : i) + delta))];
     select(next.session_id);
   };
   useHotkeys({ j: () => move(1), k: () => move(-1), g: () => void refresh() });
@@ -106,9 +128,66 @@ export const SessionPanel: React.FC<SessionPanelProps> = ({ token, onTokenChange
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <nav aria-label="Sessions" className="flex w-[420px] shrink-0 flex-col overflow-y-auto border-r border-term-rule bg-term-raise">
-          <ListHead aside={`${sessions.length}`}>recorded sessions</ListHead>
+          <ListHead aside={visible.length === sessions.length ? `${sessions.length}` : `${visible.length}/${sessions.length}`}>recorded sessions</ListHead>
+          <div className="flex shrink-0 flex-col gap-1 border-b border-term-rule px-[6px] py-[6px]">
+            <TermInput
+              filter
+              hotkey="/"
+              value={filter.text}
+              onChange={(e) => setFilter((prev) => ({ ...prev, text: e.target.value }))}
+              placeholder="filter session id"
+              aria-label="Filter sessions by id"
+              spellCheck={false}
+              className="w-full min-w-0"
+              wrapClassName="w-full"
+            />
+            {statuses.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1" aria-label="Filter by status">
+                {statuses.map((status) => (
+                  <TermButton
+                    key={status}
+                    toggled={filter.statuses.includes(status)}
+                    onClick={() => toggleStatus(status)}
+                    title={`Show only ${status} sessions`}
+                  >
+                    {status}
+                  </TermButton>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-1">
+              <TermInput
+                type="date"
+                value={filter.from}
+                onChange={(e) => setFilter((prev) => ({ ...prev, from: e.target.value }))}
+                aria-label="Created from (UTC)"
+                className="w-[136px] min-w-0"
+              />
+              <span className="text-term-dim">–</span>
+              <TermInput
+                type="date"
+                value={filter.to}
+                onChange={(e) => setFilter((prev) => ({ ...prev, to: e.target.value }))}
+                aria-label="Created to (UTC)"
+                className="w-[136px] min-w-0"
+              />
+              <Segmented<SessionSort>
+                label="Sort sessions"
+                value={filter.sort}
+                onChange={(sort) => setFilter((prev) => ({ ...prev, sort }))}
+                options={[
+                  { value: 'newest', label: 'newest' },
+                  { value: 'loss', label: 'loss' },
+                ]}
+              />
+              {(filter.text !== '' || filter.statuses.length > 0 || filter.from !== '' || filter.to !== '') && (
+                <TermButton onClick={() => setFilter(defaultSessionFilter())}>clear</TermButton>
+              )}
+            </div>
+          </div>
           {sessions.length === 0 && <Empty>No sessions loaded. Enter the URL and token, then Refresh.</Empty>}
-          {sessions.map((s) => {
+          {sessions.length > 0 && visible.length === 0 && <Empty>No sessions match the filter.</Empty>}
+          {visible.map((s) => {
             const on = s.session_id === selected;
             return (
               <button
