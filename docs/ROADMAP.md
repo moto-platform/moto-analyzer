@@ -17,7 +17,8 @@ The analyzer is the developer's engineering tool. It shows frames, decoded signa
 | Trace | overwrite view per bus and ID, chronological log, E2E status, pause-on-ID, ASC/CSV/JSON export |
 | Sniffer | byte heatmap, notch filter, flow view, bit-flip classes |
 | Oscilloscope | platform signals and DIDs, dual cursors, math channels, CSV/PNG export |
-| UDS observer | ISO-TP reassembly, request/response pairing, DIDs, DTCs with status bits, NRCs, `tester_policy` and second-tester alerts; 0x19 snapshot and extended data shown as raw bytes |
+| UDS observer | ISO-TP reassembly, request/response pairing, DIDs, DTCs with status bits, NRCs, `tester_policy` and second-tester alerts |
+| Freeze frames (A5) | 0x19 0x04 / 0x06 records decoded with `dtc_record_reports` and the DID catalog: snapshot cards show named values with units, extended-data cards name the first record kind; an unknown or variable-length DID stops the walk and the rest stays raw with its reason |
 | Health | D-079 windows W1-W5, E2E supervisor, heartbeats |
 | HUD | cornering level from 0x023; UNAVAILABLE without a fresh, E2E-valid status |
 | Cluster (A1, analyzer#13) | key **F**: tach, speed, coolant / battery / throttle, lean, telltales (cornering level, BSM, immobilizer, ECU present), node heartbeats; every readout from a defs name, "no data" or STALE (`E2E_TIMEOUT_CYCLES` x DBC cycle) instead of a guessed value; cornering UNAVAILABLE without a fresh frame |
@@ -32,7 +33,6 @@ The analyzer is the developer's engineering tool. It shows frames, decoded signa
 | # | Task | Depends on | Done when |
 |---|---|---|---|
 | A1.1 | **Tach rev limit:** the tach arc follows the DBC range of the RPM signal (0-16383.75 rpm), so normal RPM sits low on the arc; scale it to the real rev limit | a sourced rev-limit constant in defs (`/signal-change`); never a literal in the analyzer | the arc end comes from the defs constant; the DBC range stays the fallback |
-| A5 | **Decoded freeze frames (D-080, D-090):** turn the 0x19 0x04 / 0x06 bytes into named values with the ISO framing in `uds/iso14229.yaml` `dtc_record_reports` and the DID catalog; an unknown or variable-length DID stops the walk, the rest stays raw with its reason | defs D-090 (defs#108, on main); a defs release (v0.20.0) and the submodule bump (red zone, Claude) | snapshot cards show names and units from defs, raw bytes as fallback; the decoder passes `tools/codegen/tests/vectors/dtc_records.yaml` from the submodule |
 | A6 | **Desktop (Tauri 2) and native HAL:** SocketCAN with `listen-only on`, SLCAN `L`, candleLight/gs_usb; the HAL refuses any interface it cannot open listen-only | rustup on the dev machine; red zone, Claude only | a test proves the refusal; the shell runs the same frontend; `.dmg`, AppImage/`.deb`, `.msi` from CI |
 | A7 | **Offline GPS track** (D-076): local or self-hosted tiles, colour by speed or lean | GPS in recorded sessions | zero requests to third-party hosts (test); coordinates never committed |
 | A9 | **Repo hygiene:** analyzer CI as a required check (GitHub setting, user); consume per-signal tables from defs instead of parsing the DBC once defs generates them (ISSUES E-20) | defs E-20 item 1 | `src/services/dbcParser.ts` used only for "custom DBC" |

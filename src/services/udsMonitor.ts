@@ -324,7 +324,7 @@ export class UdsMonitor {
       return n === 0 ? 'no DTC' : `${n} DTC(s)`;
     }
     if ((sub === 0x04 || sub === 0x06) && p.length >= 6) {
-      // Record layouts are manufacturer-specific: kept raw until defs define them (D-080 item 5).
+      // Keep the record bytes raw; UdsPanel decodes them with the defs framing (D-090).
       const dtc = (p[2] << 16) | (p[3] << 8) | p[4];
       const e = upsert(dtc, p[5]);
       if (sub === 0x04) e.snapshot = p.slice(6);

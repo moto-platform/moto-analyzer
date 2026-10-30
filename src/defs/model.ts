@@ -33,6 +33,42 @@ export interface IdentificationDid {
   encoding: string;
 }
 
+/** One value inside a multi-value catalog DID (D-068). */
+export interface DidFieldDef {
+  name: string;
+  byte: number;
+  size: number;
+  bit: number;
+  bits: number;
+  factorNum: number;
+  factorDen: number;
+  offset: number;
+  unit: string;
+  enumNames?: Record<number, string>;
+  notUsedRaw?: number;
+}
+
+/**
+ * A DID the host can decode: a polled vehicle DID or an OBD catalog candidate.
+ * `fields` is set only for a multi-value entry.
+ */
+export interface CatalogDidDef {
+  did: number;
+  name: string;
+  label: string;
+  group: string;
+  description: string;
+  length: number;
+  status: 'polled' | 'candidate';
+  factorNum: number;
+  factorDen: number;
+  offset: number;
+  unit: string;
+  min: number;
+  max: number;
+  fields?: DidFieldDef[];
+}
+
 export interface TesterPolicy {
   allowed: { sid: number; name: string; subfunctions?: number[] }[];
   forbidden: number[];
@@ -56,6 +92,28 @@ export interface VehicleDefs {
   dids: DidDef[];
 }
 
+export interface DtcSnapshotReport {
+  /** Positive SID and sub-function, derived from the service and sub-function names. */
+  response: [number, number];
+  recordHeaderLength: number;
+  identifierLength: number;
+  undefinedNumberOfIdentifiers: number;
+  legislatedRecordNumber: number;
+}
+
+export interface DtcExtDataReport {
+  response: [number, number];
+  recordHeaderLength: number;
+  manufacturerRecords: [number, number];
+  obdRecords: [number, number];
+}
+
+export interface DtcRecordReports {
+  dtcAndStatusLength: number;
+  snapshot: DtcSnapshotReport;
+  extData: DtcExtDataReport;
+}
+
 export interface Iso14229Names {
   services: Map<number, string>;
   positiveResponseOffset: number;
@@ -67,6 +125,7 @@ export interface Iso14229Names {
   nrcs: Map<number, string>;
   p2ResolutionMs: number;
   p2StarResolutionMs: number;
+  dtcRecordReports: DtcRecordReports;
 }
 
 export type WindowOp = 'lt' | 'le' | 'gt' | 'ge' | 'eq';
@@ -97,6 +156,12 @@ export interface Defs {
   vehicleDbc: DbcCatalog;
   vehicle: VehicleDefs;
   identification: IdentificationDid[];
+  /**
+   * Polled vehicle DIDs plus OBD catalog candidates, by DID. Identification DIDs stay out:
+   * they are variable length, so a freeze-frame walk stops at them (D-090).
+   */
+  catalog: CatalogDidDef[];
+  catalogByDid: Map<number, CatalogDidDef>;
   iso: Iso14229Names;
   windows: HealthWindowDef[];
   limits: CorneringLimits;
@@ -205,19 +270,116 @@ function buildVehicle(doc: any): VehicleDefs {
   };
 }
 
+function buildCatalog(vehicle: VehicleDefs, obd: any): CatalogDidDef[] {
+  const polledMeta = obd.polled ?? {};
+  const polled: CatalogDidDef[] = vehicle.dids.map((d) => ({
+    did: d.did,
+    name: d.name,
+    label: String(polledMeta[d.name]?.label ?? d.name),
+    group: String(polledMeta[d.name]?.group ?? ''),
+    description: d.description,
+    length: d.length,
+    status: 'polled',
+    factorNum: d.factorNum,
+    factorDen: d.factorDen,
+    offset: d.offset,
+    unit: d.unit,
+    min: d.min,
+    max: d.max,
+  }));
+  const candidates: CatalogDidDef[] = (obd.candidates ?? []).map((c: any) => {
+    const length = num(c.length, `${c.name}.length`);
+    const fields: DidFieldDef[] | undefined = c.fields?.map((f: any, i: number) => {
+      const what = `${c.name}.fields[${i}]`;
+      const size = num(f.size ?? 1, `${what}.size`);
+      return {
+        name: String(f.name),
+        byte: num(f.byte, `${what}.byte`),
+        size,
+        bit: num(f.bit ?? 0, `${what}.bit`),
+        bits: num(f.bits ?? 8 * size, `${what}.bits`),
+        factorNum: num(f.factor_num, `${what}.factor_num`),
+        factorDen: num(f.factor_den, `${what}.factor_den`),
+        offset: num(f.offset, `${what}.offset`),
+        unit: String(f.unit),
+        enumNames: f.enum
+          ? Object.fromEntries(Object.entries(f.enum).map(([raw, name]) => [Number(raw), String(name)]))
+          : undefined,
+        notUsedRaw: f.not_used_raw === undefined || f.not_used_raw === null ? undefined : num(f.not_used_raw, `${what}.not_used_raw`),
+      };
+    });
+    // A multi-value entry has no formula of its own: like the defs codegen, its scalar
+    // columns are the neutral raw view. A scalar entry must carry all of them.
+    const scalar = fields
+      ? { factorNum: 1, factorDen: 1, offset: 0, unit: '', min: 0, max: 2 ** (8 * length) - 1 }
+      : {
+          factorNum: num(c.factor_num, `${c.name}.factor_num`),
+          factorDen: num(c.factor_den, `${c.name}.factor_den`),
+          offset: num(c.offset, `${c.name}.offset`),
+          unit: String(c.unit),
+          min: num(c.min, `${c.name}.min`),
+          max: num(c.max, `${c.name}.max`),
+        };
+    return {
+      did: num(c.did, 'candidate.did'),
+      name: String(c.name),
+      label: String(c.label ?? c.name),
+      group: String(c.group ?? ''),
+      description: String(c.description ?? ''),
+      length,
+      status: 'candidate',
+      ...scalar,
+      fields,
+    };
+  });
+  return [...polled, ...candidates].sort((a, b) => a.did - b.did);
+}
+
 function buildIso(doc: any): Iso14229Names {
   const toMap = (list: any[], key: string) => new Map<number, string>(list.map((x) => [num(x[key], key), String(x.name)]));
+  const services = toMap(doc.services, 'sid');
+  const readDtcSubfunctions = toMap(doc.read_dtc_subfunctions, 'id');
+  const positiveResponseOffset = num(doc.positive_response_offset, 'positive_response_offset');
+  const dtcService = doc.services.find((s: any) => s.name === 'READ_DTC_INFORMATION');
+  if (!dtcService) throw new Error('defs: READ_DTC_INFORMATION service not found');
+  const subfunctionId = (name: string): number => {
+    const found = doc.read_dtc_subfunctions.find((s: any) => s.name === name);
+    if (!found) throw new Error(`defs: DTC sub-function ${name} not found`);
+    return num(found.id, `${name}.id`);
+  };
+  const reports = doc.dtc_record_reports;
+  const sid = num(dtcService.sid, 'READ_DTC_INFORMATION.sid') + positiveResponseOffset;
+  const pair = (name: string): [number, number] => [sid, subfunctionId(name)];
   return {
-    services: toMap(doc.services, 'sid'),
-    positiveResponseOffset: num(doc.positive_response_offset, 'positive_response_offset'),
+    services,
+    positiveResponseOffset,
     negativeResponseSid: num(doc.negative_response_sid, 'negative_response_sid'),
     suppressPosRspBit: num(doc.suppress_pos_rsp_bit, 'suppress_pos_rsp_bit'),
     sessions: toMap(doc.sessions, 'id'),
-    readDtcSubfunctions: toMap(doc.read_dtc_subfunctions, 'id'),
+    readDtcSubfunctions,
     dtcStatusBits: doc.dtc_status_bits.map((b: any) => ({ mask: num(b.mask, 'mask'), name: String(b.name) })),
     nrcs: toMap(doc.nrcs, 'nrc'),
     p2ResolutionMs: num(doc.p2_resolution_ms, 'p2_resolution_ms'),
     p2StarResolutionMs: num(doc.p2_star_resolution_ms, 'p2_star_resolution_ms'),
+    dtcRecordReports: {
+      dtcAndStatusLength: num(reports.dtc_and_status_length, 'dtc_and_status_length'),
+      snapshot: {
+        response: pair(reports.snapshot.subfunction),
+        recordHeaderLength: num(reports.snapshot.record_header_length, 'snapshot.record_header_length'),
+        identifierLength: num(reports.snapshot.identifier_length, 'snapshot.identifier_length'),
+        undefinedNumberOfIdentifiers: num(reports.snapshot.undefined_number_of_identifiers, 'snapshot.undefined_number_of_identifiers'),
+        legislatedRecordNumber: num(reports.snapshot.legislated_record_number, 'snapshot.legislated_record_number'),
+      },
+      extData: {
+        response: pair(reports.ext_data.subfunction),
+        recordHeaderLength: num(reports.ext_data.record_header_length, 'ext_data.record_header_length'),
+        manufacturerRecords: [
+          num(reports.ext_data.manufacturer_records[0], 'manufacturer_records[0]'),
+          num(reports.ext_data.manufacturer_records[1], 'manufacturer_records[1]'),
+        ],
+        obdRecords: [num(reports.ext_data.obd_records[0], 'obd_records[0]'), num(reports.ext_data.obd_records[1], 'obd_records[1]')],
+      },
+    },
   };
 }
 
@@ -255,17 +417,21 @@ function buildLimits(doc: any): CorneringLimits {
 
 export function buildDefs(src: DefsSources): Defs {
   const obd = parseYaml(src.obdCatalogYaml);
+  const vehicle = buildVehicle(parseYaml(src.vehicleYaml));
+  const catalog = buildCatalog(vehicle, obd);
   return {
     ref: src.ref,
     platform: parseDbc(src.platformDbc),
     vehicleDbc: parseDbc(src.vehicleDbc),
-    vehicle: buildVehicle(parseYaml(src.vehicleYaml)),
+    vehicle,
     identification: (obd.identification ?? []).map((x: any) => ({
       did: num(x.did, 'identification.did'),
       name: String(x.name),
       label: String(x.label ?? x.name),
       encoding: String(x.encoding ?? 'ascii'),
     })),
+    catalog,
+    catalogByDid: new Map(catalog.map((d) => [d.did, d])),
     iso: buildIso(parseYaml(src.iso14229Yaml)),
     windows: buildWindows(parseYaml(src.derivedYaml)),
     limits: buildLimits(parseYaml(src.limitsYaml)),
@@ -273,7 +439,7 @@ export function buildDefs(src: DefsSources): Defs {
 }
 
 /** Physical value of a DID answer: big-endian raw * factor_num / factor_den + offset. */
-export function decodeDid(def: DidDef, bytes: number[]): number | null {
+export function decodeDid(def: Pick<DidDef, 'length' | 'factorNum' | 'factorDen' | 'offset'>, bytes: number[]): number | null {
   if (bytes.length < def.length) return null;
   let raw = 0;
   for (let i = 0; i < def.length; i++) raw = raw * 256 + bytes[i];
