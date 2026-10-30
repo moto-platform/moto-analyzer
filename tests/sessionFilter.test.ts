@@ -28,6 +28,11 @@ describe('sessionFilter', () => {
     expect(sessionStatuses([{ session_id: 'x' }])).toEqual([]);
   });
 
+  it('keeps a selected status listed when no loaded row has it', () => {
+    expect(sessionStatuses(rows, ['stale'])).toEqual(['fail', 'ok', 'stale', 'warn']);
+    expect(sessionStatuses([], ['ok'])).toEqual(['ok']);
+  });
+
   it('filters the session id case-insensitively', () => {
     expect(filterSessions(rows, withFilter({ text: ' RIDE-B ' })).map((r) => r.session_id)).toEqual(['ride-b']);
   });

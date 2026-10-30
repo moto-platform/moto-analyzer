@@ -39,7 +39,7 @@ export const SessionPanel: React.FC<SessionPanelProps> = ({ token, onTokenChange
 
   const client = useMemo(() => new SessionClient(serverUrl, token), [serverUrl, token]);
   const visible = useMemo(() => filterSessions(sessions, filter), [sessions, filter]);
-  const statuses = useMemo(() => sessionStatuses(sessions), [sessions]);
+  const statuses = useMemo(() => sessionStatuses(sessions, filter.statuses), [sessions, filter.statuses]);
 
   const run = useCallback(async (fn: () => Promise<void>) => {
     setBusy(true);

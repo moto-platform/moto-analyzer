@@ -74,9 +74,13 @@ function byLoss(a: SessionRow, b: SessionRow): number {
   return bl - al || byNewest(a, b);
 }
 
-/** Status values that occur in the loaded list, without assuming a fixed vocabulary. */
-export function sessionStatuses(rows: readonly SessionRow[]): string[] {
-  const statuses = new Set<string>();
+/**
+ * Status values that occur in the loaded list, without assuming a fixed vocabulary.
+ * Selected values stay listed even when no row has them (a remembered filter after a
+ * refresh), so the chip that hides every row can still be switched off.
+ */
+export function sessionStatuses(rows: readonly SessionRow[], selected: readonly string[] = []): string[] {
+  const statuses = new Set<string>(selected);
   for (const row of rows) {
     if (typeof row.status === 'string' && row.status !== '') statuses.add(row.status);
   }
