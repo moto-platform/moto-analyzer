@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { UdsPanel } from '../../src/components/UdsPanel';
 import { createStore } from './helpers';
+import { DEFS } from '../../src/defs';
 import { CanFrame } from '../../src/types/can';
 
 afterEach(cleanup);
@@ -61,5 +62,27 @@ describe('UdsPanel freeze frames', () => {
     expect(screen.getByText(/extended data · record 1 \(manufacturer-specific\)/)).toBeTruthy();
     expect(screen.getByText(/stopped at unknown DID/)).toBeTruthy();
     expect(document.body.textContent).toContain('rest AB CD 01 02');
+  });
+
+  it('offers the JSON and CSV export on the DTCs tab when DTCs are present', () => {
+    const store = createStore();
+    exchange(store, 0x123456, [0x59, 0x04, 0x12, 0x34, 0x56, 0x08], 0);
+
+    render(<UdsPanel store={store} canTransmit={false} onTransmit={() => ({ ok: true })} />);
+    expect(screen.queryByRole('button', { name: /export json/i })).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: /dtcs/i }));
+
+    expect(screen.getByRole('button', { name: /export json/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /export csv/i })).toBeTruthy();
+  });
+
+  it('defaults the composer DID to the first defs DID', () => {
+    const store = createStore();
+    render(<UdsPanel store={store} canTransmit={false} onTransmit={() => ({ ok: true })} />);
+    fireEvent.click(screen.getByRole('radio', { name: /composer/i }));
+
+    const first = DEFS.vehicle.dids[0];
+    const expected = `0x${first.did.toString(16).toUpperCase().padStart(4, '0')}`;
+    expect((screen.getByLabelText('did') as HTMLSelectElement).value).toBe(expected);
   });
 });

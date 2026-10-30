@@ -3,7 +3,9 @@ import { CaptureStore } from '../state/captureStore';
 import { DtcEntry, UdsTransaction } from '../services/udsMonitor';
 import { Defs } from '../defs/model';
 import { decodeDtcExtDataRecords, decodeDtcSnapshotRecords, DtcExtDataKind, DtcSnapshotValue, DtcStop } from '../services/dtcRecords';
+import { dtcReportToCsv, dtcReportToJson } from '../services/dtcReport';
 import { composeUdsRequest, composerServices } from '../services/udsComposer';
+import { downloadFile } from '../services/exportService';
 import { formatValue, hexId } from '../services/format';
 import { KeyValues, Na, Note, Pane, Segmented, TermButton, TermInput, Toolbar, cn } from '../ui/primitives';
 import { useHotkeys } from '../ui/keys';
@@ -178,7 +180,8 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
   const services = useMemo(() => composerServices(defs), [defs]);
   const [sid, setSid] = useState<number>(0x22);
   const [sub, setSub] = useState<number>(0x03);
-  const [didText, setDidText] = useState<string>('0xF40C');
+  const defaultDid = defs.vehicle.dids[0];
+  const [didText, setDidText] = useState<string>(defaultDid ? didHex(defaultDid.did) : '');
   const [extraText, setExtraText] = useState<string>('');
   const [composerLog, setComposerLog] = useState<string[]>([]);
   const svc = services.find((s) => s.sid === sid);
@@ -232,6 +235,12 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
     composer: 'composer',
   };
 
+  const exportDtcs = (format: 'json' | 'csv') => {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    if (format === 'json') downloadFile(dtcReportToJson(defs, dtcs), `dtc_report_${ts}.json`, 'application/json');
+    else downloadFile(dtcReportToCsv(defs, dtcs), `dtc_report_${ts}.csv`, 'text/csv');
+  };
+
   return (
     <div className="flex h-full select-none flex-col bg-term-bg">
       <Toolbar>
@@ -254,6 +263,16 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
             />
             <TermButton hotkey="R" toggled={hideRoutine} onClick={() => setHideRoutine((v) => !v)} title="Hide TesterPresent with suppressPosRsp">
               hide TesterPresent
+            </TermButton>
+          </>
+        )}
+        {tab === 'dtcs' && dtcs.length > 0 && (
+          <>
+            <TermButton boxed onClick={() => exportDtcs('json')}>
+              export JSON
+            </TermButton>
+            <TermButton boxed onClick={() => exportDtcs('csv')}>
+              export CSV
             </TermButton>
           </>
         )}
