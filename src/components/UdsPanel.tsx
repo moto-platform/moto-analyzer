@@ -3,8 +3,10 @@ import { CaptureStore } from '../state/captureStore';
 import { DtcEntry, UdsTransaction } from '../services/udsMonitor';
 import { Defs } from '../defs/model';
 import { decodeDtcExtDataRecords, decodeDtcSnapshotRecords, DtcExtDataKind, DtcSnapshotValue, DtcStop } from '../services/dtcRecords';
+import { dtcReportToCsv, dtcReportToJson } from '../services/dtcReport';
 import { composeUdsRequest, composerServices } from '../services/udsComposer';
-import { formatValue, hexId } from '../services/format';
+import { downloadFile } from '../services/exportService';
+import { didHex, formatValue, hexId } from '../services/format';
 import { KeyValues, Na, Note, Pane, Segmented, TermButton, TermInput, Toolbar, cn } from '../ui/primitives';
 import { useHotkeys } from '../ui/keys';
 import { Empty, GutterMark, TD, TH } from '../ui/panel-parts';
@@ -21,7 +23,6 @@ const TABS: Tab[] = ['transactions', 'dids', 'dtcs', 'composer'];
 
 const hex2 = (b: number) => b.toString(16).toUpperCase().padStart(2, '0');
 const hexBytes = (b: number[]) => b.map(hex2).join(' ');
-const didHex = (d: number) => `0x${d.toString(16).toUpperCase().padStart(4, '0')}`;
 
 function parseHexBytes(text: string): number[] | null {
   const clean = text.replace(/0x/gi, '').replace(/[\s,]+/g, '');
@@ -178,7 +179,8 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
   const services = useMemo(() => composerServices(defs), [defs]);
   const [sid, setSid] = useState<number>(0x22);
   const [sub, setSub] = useState<number>(0x03);
-  const [didText, setDidText] = useState<string>('0xF40C');
+  const defaultDid = defs.vehicle.dids[0];
+  const [didText, setDidText] = useState<string>(defaultDid ? didHex(defaultDid.did) : '');
   const [extraText, setExtraText] = useState<string>('');
   const [composerLog, setComposerLog] = useState<string[]>([]);
   const svc = services.find((s) => s.sid === sid);
@@ -232,6 +234,12 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
     composer: 'composer',
   };
 
+  const exportDtcs = (format: 'json' | 'csv') => {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    if (format === 'json') downloadFile(dtcReportToJson(defs, dtcs), `dtc_report_${ts}.json`, 'application/json');
+    else downloadFile(dtcReportToCsv(defs, dtcs), `dtc_report_${ts}.csv`, 'text/csv');
+  };
+
   return (
     <div className="flex h-full select-none flex-col bg-term-bg">
       <Toolbar>
@@ -254,6 +262,16 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
             />
             <TermButton hotkey="R" toggled={hideRoutine} onClick={() => setHideRoutine((v) => !v)} title="Hide TesterPresent with suppressPosRsp">
               hide TesterPresent
+            </TermButton>
+          </>
+        )}
+        {tab === 'dtcs' && dtcs.length > 0 && (
+          <>
+            <TermButton boxed onClick={() => exportDtcs('json')}>
+              export JSON
+            </TermButton>
+            <TermButton boxed onClick={() => exportDtcs('csv')}>
+              export CSV
             </TermButton>
           </>
         )}
@@ -478,7 +496,7 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
                     <select id="uds-did" value={didText} onChange={(e) => setDidText(e.target.value)} className="term-select justify-self-start">
                       <optgroup label="uds/vehicle_cl250.yaml">
                         {defs.vehicle.dids.map((d) => (
-                          <option key={d.did} value={`0x${d.did.toString(16).toUpperCase()}`}>
+                          <option key={d.did} value={didHex(d.did)}>
                             0x{d.did.toString(16).toUpperCase()} {d.name}
                             {d.verified ? '' : ' (unverified)'}
                           </option>
@@ -486,7 +504,7 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
                       </optgroup>
                       <optgroup label="uds/obd_catalog.yaml identification">
                         {defs.identification.map((d) => (
-                          <option key={d.did} value={`0x${d.did.toString(16).toUpperCase()}`}>
+                          <option key={d.did} value={didHex(d.did)}>
                             0x{d.did.toString(16).toUpperCase()} {d.name}
                           </option>
                         ))}

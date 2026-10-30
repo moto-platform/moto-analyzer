@@ -21,3 +21,6 @@ export function formatSignal(sig: DbcSignalDef | undefined, v: number | string |
 }
 
 export const hexId = (id: number, extended: boolean) => `0x${id.toString(16).toUpperCase().padStart(extended ? 8 : 3, '0')}`;
+
+/** A UDS data identifier as the composer and the reports write it: 0x plus four hex digits. */
+export const didHex = (did: number) => `0x${did.toString(16).toUpperCase().padStart(4, '0')}`;

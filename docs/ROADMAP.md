@@ -19,6 +19,7 @@ The analyzer is the developer's engineering tool. It shows frames, decoded signa
 | Oscilloscope | platform signals and DIDs, dual cursors, math channels, CSV/PNG export |
 | UDS observer | ISO-TP reassembly, request/response pairing, DIDs, DTCs with status bits, NRCs, `tester_policy` and second-tester alerts |
 | Freeze frames (A5) | 0x19 0x04 / 0x06 records decoded with `dtc_record_reports` and the DID catalog: snapshot cards show named values with units, extended-data cards name the first record kind; an unknown or variable-length DID stops the walk and the rest stays raw with its reason |
+| DTC report export (A5.1) | JSON and CSV export buttons on the DTCs tab: JSON has one object per DTC (code, status, decoded snapshot / extended data, raw bytes as hex) and the defs ref; CSV has one row per decoded value (one per field of a multi-value DID), a `stop:<reason>` row when the walk stopped and an `ext:<kind>` row for extended data; names, units and DIDs come from the defs catalog |
 | Health | D-079 windows W1-W5, E2E supervisor, heartbeats |
 | HUD | cornering level from 0x023; UNAVAILABLE without a fresh, E2E-valid status |
 | Cluster (A1, analyzer#13) | key **F**: tach, speed, coolant / battery / throttle, lean, telltales (cornering level, BSM, immobilizer, ECU present), node heartbeats; every readout from a defs name, "no data" or STALE (`E2E_TIMEOUT_CYCLES` x DBC cycle) instead of a guessed value; cornering UNAVAILABLE without a fresh frame |
