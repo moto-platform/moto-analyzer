@@ -18,6 +18,8 @@ const bytes = (text: string): number[] => {
 };
 
 const hex = (data: number[]): string => data.map((b) => b.toString(16).toUpperCase().padStart(2, '0')).join('');
+const hexDtcOf = (d: DtcEntry) => `0x${d.dtc.toString(16).toUpperCase().padStart(6, '0')}`;
+const hexStatusOf = (d: DtcEntry) => `0x${d.status.toString(16).toUpperCase().padStart(2, '0')}`;
 const vector = (name: string) => vectors.snapshot.find((v: any) => v.name === name);
 
 const statusNames = (status: number): string[] =>
@@ -66,6 +68,7 @@ describe('DTC report from the pinned defs vectors', () => {
 
     const [m, s, e] = report.dtcs;
     expect(m.dtc).toBe('0x123456');
+    expect(m.code).toBe(multi.code);
     expect(m.status).toBe(0x08);
     expect(m.statusNames).toEqual(statusNames(0x08));
     expect(m.firstSeen).toBe(1.25);
@@ -96,18 +99,21 @@ describe('DTC report from the pinned defs vectors', () => {
     expect(e.extDataRaw).toBe('01AABB92CC');
   });
 
-  it('writes a CSV row per decoded value, per multi-value field, plus a stop row and a bare DTC row', () => {
+  it('writes a CSV row per decoded value, per multi-value field, plus stop, extended-data and bare DTC rows', () => {
     const multi = entry('undefined_number_runs_to_the_end');
     const stopped = entry('unknown_did_stops_the_walk');
     const bare = entry('no_record_stored');
-    const rows = dtcReportToCsv(DEFS, [multi, stopped, bare]).split('\n');
+    const extended = extEntry('manufacturer_record_first');
+    const rows = dtcReportToCsv(DEFS, [multi, stopped, bare, extended]).split('\n');
+    const code = formatDtc(0x123456);
 
-    expect(rows[0]).toBe('dtc,status,record_number,did,name,field,value,unit,raw');
-    expect(rows).toContain('0x123456,0x08,0,0xF40D,VEHICLE_SPEED,,60,km/h,3C');
-    expect(rows).toContain('0x123456,0x08,0,0xF403,FUEL_SYSTEM_STATUS,FUEL_SYSTEM_1,CLOSED_LOOP,,0200');
-    expect(rows).toContain('0x123456,0x08,0,0xF403,FUEL_SYSTEM_STATUS,FUEL_SYSTEM_2,NOT_REPORTED,,0200');
-    expect(rows).toContain('0x123456,0x08,,,stop:unknown_did,,,,ABCD0102');
-    expect(rows).toContain('0x123456,0x0C,,,,,,,');
-    expect(rows.filter((row) => row.startsWith('0x123456,0x08') && !row.includes('stop:'))).toHaveLength(4);
+    expect(rows[0]).toBe('dtc,code,status,record_number,did,name,field,value,unit,raw');
+    expect(rows).toContain(`0x123456,${code},0x08,0,0xF40D,VEHICLE_SPEED,,60,km/h,3C`);
+    expect(rows).toContain(`0x123456,${code},0x08,0,0xF403,FUEL_SYSTEM_STATUS,FUEL_SYSTEM_1,CLOSED_LOOP,,0200`);
+    expect(rows).toContain(`0x123456,${code},0x08,0,0xF403,FUEL_SYSTEM_STATUS,FUEL_SYSTEM_2,NOT_REPORTED,,0200`);
+    expect(rows).toContain(`0x123456,${code},0x08,,,stop:unknown_did,,,,ABCD0102`);
+    expect(rows).toContain(`0x123456,${code},0x0C,,,,,,,`);
+    expect(rows.filter((row) => row.startsWith(`0x123456,${code},0x08`) && !/,(stop|ext):/.test(row))).toHaveLength(4);
+    expect(rows.filter((row) => row.includes(',ext:'))).toEqual([`${hexDtcOf(extended)},${extended.code},${hexStatusOf(extended)},1,,ext:manufacturer,,,,01AABB92CC`]);
   });
 });

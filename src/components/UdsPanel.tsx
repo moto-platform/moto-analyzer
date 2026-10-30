@@ -6,7 +6,7 @@ import { decodeDtcExtDataRecords, decodeDtcSnapshotRecords, DtcExtDataKind, DtcS
 import { dtcReportToCsv, dtcReportToJson } from '../services/dtcReport';
 import { composeUdsRequest, composerServices } from '../services/udsComposer';
 import { downloadFile } from '../services/exportService';
-import { formatValue, hexId } from '../services/format';
+import { didHex, formatValue, hexId } from '../services/format';
 import { KeyValues, Na, Note, Pane, Segmented, TermButton, TermInput, Toolbar, cn } from '../ui/primitives';
 import { useHotkeys } from '../ui/keys';
 import { Empty, GutterMark, TD, TH } from '../ui/panel-parts';
@@ -23,7 +23,6 @@ const TABS: Tab[] = ['transactions', 'dids', 'dtcs', 'composer'];
 
 const hex2 = (b: number) => b.toString(16).toUpperCase().padStart(2, '0');
 const hexBytes = (b: number[]) => b.map(hex2).join(' ');
-const didHex = (d: number) => `0x${d.toString(16).toUpperCase().padStart(4, '0')}`;
 
 function parseHexBytes(text: string): number[] | null {
   const clean = text.replace(/0x/gi, '').replace(/[\s,]+/g, '');
@@ -497,7 +496,7 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
                     <select id="uds-did" value={didText} onChange={(e) => setDidText(e.target.value)} className="term-select justify-self-start">
                       <optgroup label="uds/vehicle_cl250.yaml">
                         {defs.vehicle.dids.map((d) => (
-                          <option key={d.did} value={`0x${d.did.toString(16).toUpperCase()}`}>
+                          <option key={d.did} value={didHex(d.did)}>
                             0x{d.did.toString(16).toUpperCase()} {d.name}
                             {d.verified ? '' : ' (unverified)'}
                           </option>
@@ -505,7 +504,7 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
                       </optgroup>
                       <optgroup label="uds/obd_catalog.yaml identification">
                         {defs.identification.map((d) => (
-                          <option key={d.did} value={`0x${d.did.toString(16).toUpperCase()}`}>
+                          <option key={d.did} value={didHex(d.did)}>
                             0x{d.did.toString(16).toUpperCase()} {d.name}
                           </option>
                         ))}
