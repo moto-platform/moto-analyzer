@@ -156,7 +156,10 @@ export interface Defs {
   vehicleDbc: DbcCatalog;
   vehicle: VehicleDefs;
   identification: IdentificationDid[];
-  /** Polled vehicle DIDs plus OBD catalog candidates, by DID. */
+  /**
+   * Polled vehicle DIDs plus OBD catalog candidates, by DID. Identification DIDs stay out:
+   * they are variable length, so a freeze-frame walk stops at them (D-090).
+   */
   catalog: CatalogDidDef[];
   catalogByDid: Map<number, CatalogDidDef>;
   iso: Iso14229Names;
@@ -298,13 +301,25 @@ function buildCatalog(vehicle: VehicleDefs, obd: any): CatalogDidDef[] {
         factorNum: num(f.factor_num, `${what}.factor_num`),
         factorDen: num(f.factor_den, `${what}.factor_den`),
         offset: num(f.offset, `${what}.offset`),
-        unit: String(f.unit ?? ''),
+        unit: String(f.unit),
         enumNames: f.enum
           ? Object.fromEntries(Object.entries(f.enum).map(([raw, name]) => [Number(raw), String(name)]))
           : undefined,
         notUsedRaw: f.not_used_raw === undefined || f.not_used_raw === null ? undefined : num(f.not_used_raw, `${what}.not_used_raw`),
       };
     });
+    // A multi-value entry has no formula of its own: like the defs codegen, its scalar
+    // columns are the neutral raw view. A scalar entry must carry all of them.
+    const scalar = fields
+      ? { factorNum: 1, factorDen: 1, offset: 0, unit: '', min: 0, max: 2 ** (8 * length) - 1 }
+      : {
+          factorNum: num(c.factor_num, `${c.name}.factor_num`),
+          factorDen: num(c.factor_den, `${c.name}.factor_den`),
+          offset: num(c.offset, `${c.name}.offset`),
+          unit: String(c.unit),
+          min: num(c.min, `${c.name}.min`),
+          max: num(c.max, `${c.name}.max`),
+        };
     return {
       did: num(c.did, 'candidate.did'),
       name: String(c.name),
@@ -313,12 +328,7 @@ function buildCatalog(vehicle: VehicleDefs, obd: any): CatalogDidDef[] {
       description: String(c.description ?? ''),
       length,
       status: 'candidate',
-      factorNum: num(c.factor_num ?? 1, `${c.name}.factor_num`),
-      factorDen: num(c.factor_den ?? 1, `${c.name}.factor_den`),
-      offset: num(c.offset ?? 0, `${c.name}.offset`),
-      unit: String(c.unit ?? ''),
-      min: num(c.min ?? 0, `${c.name}.min`),
-      max: num(c.max ?? 2 ** (8 * length) - 1, `${c.name}.max`),
+      ...scalar,
       fields,
     };
   });

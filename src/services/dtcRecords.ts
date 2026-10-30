@@ -13,8 +13,8 @@ export interface DtcSnapshotValue {
 }
 
 export interface DtcSnapshotRecord {
-  record_number: number;
-  number_of_identifiers: number;
+  recordNumber: number;
+  numberOfIdentifiers: number;
   values: DtcSnapshotValue[];
 }
 
@@ -29,8 +29,8 @@ export interface DtcSnapshot {
 export interface DtcExtData {
   dtc: number;
   status: number;
-  first_record_number: number | null;
-  first_record_kind: DtcExtDataKind | null;
+  firstRecordNumber: number | null;
+  firstRecordKind: DtcExtDataKind | null;
   rest: number[];
 }
 
@@ -40,8 +40,9 @@ const decodeFields = (fields: DidFieldDef[], data: number[]): Record<string, Dtc
   const out: Record<string, DtcFieldValue> = {};
   for (const field of fields) {
     let raw = 0;
-    for (let i = 0; i < field.size; i++) raw = raw * 256 + (data[field.byte + i] ?? 0);
-    raw = Math.floor(raw / 2 ** field.bit) & (2 ** field.bits - 1);
+    for (let i = 0; i < field.size; i++) raw = raw * 256 + data[field.byte + i];
+    // Arithmetic, not &: bitwise operators would cut a 4-byte field to int32.
+    raw = Math.floor(raw / 2 ** field.bit) % 2 ** field.bits;
     if (field.notUsedRaw !== undefined && raw === field.notUsedRaw) out[field.name] = null;
     else if (field.enumNames !== undefined) out[field.name] = field.enumNames[raw] ?? raw;
     else if (field.factorNum === field.factorDen && field.offset === 0) out[field.name] = raw;
@@ -66,7 +67,7 @@ export function decodeDtcSnapshotRecords(defs: Defs, records: number[]): Omit<Dt
     const recordNumber = records[pos];
     const count = records[pos + 1];
     const values: DtcSnapshotValue[] = [];
-    decoded.push({ record_number: recordNumber, number_of_identifiers: count, values });
+    decoded.push({ recordNumber, numberOfIdentifiers: count, values });
     pos += report.recordHeaderLength;
 
     const undefinedCount = count === report.undefinedNumberOfIdentifiers;
@@ -118,7 +119,7 @@ export function decodeDtcExtDataRecords(defs: Defs, records: number[]): Omit<Dtc
   const [obdLow, obdHigh] = report.obdRecords;
   const kind: DtcExtDataKind | null =
     first === null ? null : first >= manufacturerLow && first <= manufacturerHigh ? 'manufacturer' : first >= obdLow && first <= obdHigh ? 'obd' : 'reserved';
-  return { first_record_number: first, first_record_kind: kind, rest: records.slice() };
+  return { firstRecordNumber: first, firstRecordKind: kind, rest: records.slice() };
 }
 
 export function decodeDtcExtData(defs: Defs, response: number[]): DtcExtData {

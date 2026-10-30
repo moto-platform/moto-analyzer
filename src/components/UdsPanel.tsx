@@ -101,12 +101,7 @@ const DtcValueText: React.FC<{ defs: Defs; value: DtcSnapshotValue }> = ({ defs,
 };
 
 const DtcSnapshotCard: React.FC<{ defs: Defs; bytes: number[] }> = ({ defs, bytes }) => {
-  let decoded;
-  try {
-    decoded = decodeDtcSnapshotRecords(defs, bytes);
-  } catch {
-    return <div className="text-term-faint">snapshot raw {hexBytes(bytes)}</div>;
-  }
+  const decoded = decodeDtcSnapshotRecords(defs, bytes);
   const count = decoded.records.reduce((n, record) => n + record.values.length, 0);
   return (
     <div className="mb-1 border border-term-rule bg-term-raise px-2 py-1">
@@ -114,15 +109,15 @@ const DtcSnapshotCard: React.FC<{ defs: Defs; bytes: number[] }> = ({ defs, byte
         snapshot · {decoded.records.length} record{decoded.records.length === 1 ? '' : 's'} · {count} value{count === 1 ? '' : 's'}
       </div>
       {decoded.records.map((record, i) => (
-        <div key={`${record.record_number}-${i}`} className="mt-1 border-l border-term-rule pl-2">
+        <div key={`${record.recordNumber}-${i}`} className="mt-1 border-l border-term-rule pl-2">
           <div className="text-term-faint">
-            record {record.record_number} ·{' '}
-            {record.number_of_identifiers === defs.iso.dtcRecordReports.snapshot.undefinedNumberOfIdentifiers
+            record {record.recordNumber} ·{' '}
+            {record.numberOfIdentifiers === defs.iso.dtcRecordReports.snapshot.undefinedNumberOfIdentifiers
               ? 'identifiers run to the end'
-              : `${record.number_of_identifiers} identifier${record.number_of_identifiers === 1 ? '' : 's'}`}
+              : `${record.numberOfIdentifiers} identifier${record.numberOfIdentifiers === 1 ? '' : 's'}`}
           </div>
-          {record.values.map((value) => (
-            <div key={value.did}>
+          {record.values.map((value, j) => (
+            <div key={`${value.did}-${j}`}>
               <span className="text-term-dim">{value.name}</span> (<span className="text-term-faint">0x{value.did.toString(16).toUpperCase().padStart(4, '0')}</span>) ={' '}
               <DtcValueText defs={defs} value={value} />
               <span className="ml-2 text-term-faint">{hexBytes(value.data)}</span>
@@ -143,19 +138,14 @@ const DtcSnapshotCard: React.FC<{ defs: Defs; bytes: number[] }> = ({ defs, byte
 };
 
 const DtcExtDataCard: React.FC<{ defs: Defs; bytes: number[] }> = ({ defs, bytes }) => {
-  let decoded;
-  try {
-    decoded = decodeDtcExtDataRecords(defs, bytes);
-  } catch {
-    return <div className="text-term-faint">extended raw {hexBytes(bytes)}</div>;
-  }
+  const decoded = decodeDtcExtDataRecords(defs, bytes);
   return (
     <div className="mb-1 border border-term-rule bg-term-raise px-2 py-1">
       <div className="text-term-hi">
         extended data ·{' '}
-        {decoded.first_record_kind === null
+        {decoded.firstRecordKind === null
           ? 'no record stored'
-          : `record ${decoded.first_record_number ?? '-'} (${EXT_KIND_LABEL[decoded.first_record_kind]})`}
+          : `record ${decoded.firstRecordNumber ?? '-'} (${EXT_KIND_LABEL[decoded.firstRecordKind]})`}
       </div>
       <div className="mt-1 text-term-faint">raw {hexBytes(bytes)}</div>
     </div>

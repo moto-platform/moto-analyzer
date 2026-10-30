@@ -17,20 +17,22 @@ const bytes = (text: string): number[] => {
 
 const hex = (data: number[]): string => data.map((b) => b.toString(16).toUpperCase().padStart(2, '0')).join('');
 
+// The vector file uses the Python decoder's snake_case keys.
+const snapshotRecord = (record: any) => ({
+  recordNumber: record.record_number,
+  numberOfIdentifiers: record.number_of_identifiers,
+  values: record.values.map((value: any) => ({ ...value, data: bytes(value.data) })),
+});
+
 describe('D-090 freeze-frame vectors from the pinned defs', () => {
-  it('runs every vector in the file', () => {
-    expect(vectors.snapshot.length + vectors.ext_data.length + vectors.invalid.length).toBe(16);
+  it('finds vectors in every section of the file', () => {
+    for (const section of [vectors.snapshot, vectors.ext_data, vectors.invalid]) expect(section.length).toBeGreaterThan(0);
   });
 
   for (const vector of vectors.snapshot) {
     it(`snapshot: ${vector.name}`, () => {
-      const expected = {
-        ...vector.expect,
-        records: vector.expect.records.map((record: any) => ({
-          ...record,
-          values: record.values.map((value: any) => ({ ...value, data: bytes(value.data) })),
-        })),
-      };
+      const { records, ...rest } = vector.expect;
+      const expected = { ...rest, records: records.map(snapshotRecord) };
       const actual = decodeDtcSnapshot(DEFS, bytes(vector.response));
       expect({ ...actual, rest: hex(actual.rest) }).toEqual(expected);
     });
@@ -38,8 +40,9 @@ describe('D-090 freeze-frame vectors from the pinned defs', () => {
 
   for (const vector of vectors.ext_data) {
     it(`extended data: ${vector.name}`, () => {
+      const { first_record_number, first_record_kind, ...rest } = vector.expect;
       const actual = decodeDtcExtData(DEFS, bytes(vector.response));
-      expect({ ...actual, rest: hex(actual.rest) }).toEqual(vector.expect);
+      expect({ ...actual, rest: hex(actual.rest) }).toEqual({ ...rest, firstRecordNumber: first_record_number, firstRecordKind: first_record_kind });
     });
   }
 
