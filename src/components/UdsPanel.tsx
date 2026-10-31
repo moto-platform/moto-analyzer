@@ -177,19 +177,24 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
 
   // ---------------------------------------------------------------- composer
   const services = useMemo(() => composerServices(defs), [defs]);
-  const [sid, setSid] = useState<number>(0x22);
-  const [sub, setSub] = useState<number>(0x03);
+  // The user's picks; the effective service/sub-function fall back to the first allowed ones from defs
+  // (also when defs change and the pick is no longer offered). null sub = no sub-function.
+  const [sidPick, setSid] = useState<number | null>(null);
+  const [subPick, setSub] = useState<number | null>(null);
+  const sid = (services.find((s) => s.allowed && s.sid === sidPick) ?? services.find((s) => s.allowed))?.sid ?? -1;
   const defaultDid = defs.vehicle.dids[0];
   const [didText, setDidText] = useState<string>(defaultDid ? didHex(defaultDid.did) : '');
   const [extraText, setExtraText] = useState<string>('');
   const [composerLog, setComposerLog] = useState<string[]>([]);
   const svc = services.find((s) => s.sid === sid);
+  const sub = svc?.subFunctions ? (svc.subFunctions.find((f) => f.id === subPick) ?? svc.subFunctions[0])?.id ?? null : null;
 
   const payload: number[] | null = (() => {
+    if (!svc) return null; // defs allow no service
     const extra = parseHexBytes(extraText);
     if (extra === null) return null;
     const p = [sid];
-    if (svc?.subFunctions) p.push(sub);
+    if (sub !== null) p.push(sub);
     if (svc?.takesDid) {
       const d = parseHexBytes(didText.replace(/^0x/i, '').padStart(4, '0'));
       if (!d || d.length !== 2) return null;
@@ -462,8 +467,7 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
                   onChange={(e) => {
                     const s = Number(e.target.value);
                     setSid(s);
-                    const first = services.find((x) => x.sid === s)?.subFunctions?.[0];
-                    if (first) setSub(first.id);
+                    setSub(services.find((x) => x.sid === s)?.subFunctions?.[0]?.id ?? null);
                   }}
                   className="term-select justify-self-start"
                 >
@@ -479,7 +483,7 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
                     <label htmlFor="uds-sub" className="text-term-dim">
                       sub-function
                     </label>
-                    <select id="uds-sub" value={sub} onChange={(e) => setSub(Number(e.target.value))} className="term-select justify-self-start">
+                    <select id="uds-sub" value={sub ?? ''} onChange={(e) => setSub(Number(e.target.value))} className="term-select justify-self-start">
                       {svc.subFunctions.map((s) => (
                         <option key={s.id} value={s.id}>
                           0x{hex2(s.id)} {s.name}
