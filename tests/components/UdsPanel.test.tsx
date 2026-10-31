@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { UdsPanel } from '../../src/components/UdsPanel';
 import { createStore } from './helpers';
 import { DEFS } from '../../src/defs';
+import { composerServices } from '../../src/services/udsComposer';
 import { CanFrame } from '../../src/types/can';
 
 afterEach(cleanup);
@@ -81,8 +82,33 @@ describe('UdsPanel freeze frames', () => {
     render(<UdsPanel store={store} canTransmit={false} onTransmit={() => ({ ok: true })} />);
     fireEvent.click(screen.getByRole('radio', { name: /composer/i }));
 
+    const didService = composerServices(DEFS).find((s) => s.allowed && s.takesDid)!;
+    fireEvent.change(screen.getByLabelText('service'), { target: { value: String(didService.sid) } });
     const first = DEFS.vehicle.dids[0];
     const expected = `0x${first.did.toString(16).toUpperCase().padStart(4, '0')}`;
     expect((screen.getByLabelText('did') as HTMLSelectElement).value).toBe(expected);
+  });
+
+  it('starts the composer on the first allowed service and sub-function from defs', () => {
+    const store = createStore();
+    render(<UdsPanel store={store} canTransmit={false} onTransmit={() => ({ ok: true })} />);
+    fireEvent.click(screen.getByRole('radio', { name: /composer/i }));
+
+    const first = composerServices(DEFS).find((s) => s.allowed)!;
+    expect((screen.getByLabelText('service') as HTMLSelectElement).value).toBe(String(first.sid));
+    const sub = screen.queryByLabelText('sub-function') as HTMLSelectElement | null;
+    if (first.subFunctions) expect(sub?.value).toBe(String(first.subFunctions[0].id));
+    else expect(sub).toBeNull();
+  });
+
+  it('clears the sub-function when switching to a service without sub-functions', () => {
+    const store = createStore();
+    render(<UdsPanel store={store} canTransmit={false} onTransmit={() => ({ ok: true })} />);
+    fireEvent.click(screen.getByRole('radio', { name: /composer/i }));
+
+    const none = composerServices(DEFS).find((s) => s.allowed && !s.subFunctions)!;
+    expect(none).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('service'), { target: { value: String(none.sid) } });
+    expect(screen.queryByLabelText('sub-function')).toBeNull();
   });
 });
