@@ -190,6 +190,7 @@ export const UdsPanel: React.FC<UdsPanelProps> = ({ store, canTransmit, onTransm
   const sub = svc?.subFunctions ? (svc.subFunctions.find((f) => f.id === subPick) ?? svc.subFunctions[0])?.id ?? null : null;
 
   const payload: number[] | null = (() => {
+    if (!svc) return null; // defs allow no service
     const extra = parseHexBytes(extraText);
     if (extra === null) return null;
     const p = [sid];
